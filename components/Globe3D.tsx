@@ -223,11 +223,12 @@ const Globe3D: React.FC<Globe3DProps> = ({
     });
 
     // Particles (Plankton/Small bubbles)
+    // Reduce spread for tighter trail
     for(let i=0; i<10; i++) {
       objects.push({
         type: 'particle',
-        lat: bubblePos.lat + (Math.random() - 0.5) * 5,
-        lng: bubblePos.lng + (Math.random() - 0.5) * 5,
+        lat: bubblePos.lat + (Math.random() - 0.5) * 0.5, // Reduced spread from 5 to 0.5
+        lng: bubblePos.lng + (Math.random() - 0.5) * 0.5,
         alt: bubblePos.alt + (Math.random() - 0.5) * 0.02,
         size: Math.random()
       });

@@ -5,7 +5,8 @@ const BubblesOverlay: React.FC = () => {
   const bubbles = useMemo(() => {
     return Array.from({ length: 40 }).map((_, i) => ({
       id: i,
-      left: Math.random() * 100, // Random horizontal position
+      // Concentrated in the center 40% of the screen (30% to 70%) to follow the "path"
+      left: 30 + Math.random() * 40, 
       size: Math.random() * 20 + 5, // Size between 5px and 25px
       riseDuration: Math.random() * 15 + 10, // Rise time between 10s and 25s
       riseDelay: Math.random() * -25, // Start at different times in the cycle

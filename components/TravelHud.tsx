@@ -243,28 +243,10 @@ const TravelHud: React.FC<TravelHudProps> = ({ current, progress, weather = 'NON
       {/* Decorative Overlay: Vignette for Underwater Feel */}
       <div className="absolute inset-0 shadow-[inset_0_0_150px_rgba(0,30,60,0.6)] z-0 pointer-events-none"></div>
 
-      {/* --- DYNAMIC PARTICLES (Bubbles & Plankton) --- */}
+      {/* --- DYNAMIC PARTICLES (Bubbles only) --- */}
       <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
-        
         {/* Rising Bubbles Component */}
         <BubblesOverlay />
-
-        {/* Drifting Plankton (Bioluminescent) */}
-        {[...Array(40)].map((_, i) => (
-           <div 
-             key={`plankton-${i}`}
-             className="absolute rounded-full"
-             style={{
-               left: `${Math.random() * 100}%`,
-               top: `${Math.random() * 100}%`,
-               width: `${Math.random() * 4 + 2}px`,
-               height: `${Math.random() * 4 + 2}px`,
-               animation: `drift ${Math.random() * 20 + 15}s linear infinite, pulseGlow ${Math.random() * 2 + 1}s ease-in-out infinite`,
-               animationDelay: `-${Math.random() * 25}s`,
-               opacity: Math.random() * 0.5 + 0.2
-             }}
-           ></div>
-        ))}
       </div>
 
       {/* Header Info */}

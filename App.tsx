@@ -24,6 +24,28 @@ const App: React.FC = () => {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  // Use a ref to access the latest handleArrival without re-triggering the effect
+  const handleArrivalRef = useRef<() => void>(() => {});
+
+  const handleArrival = async () => {
+    if (selectedCurrent && letter.content) {
+      // Transition immediately to show loading screen
+      setPhase('ARRIVAL'); 
+      setIsGenerating(true);
+      
+      // Perform AI generation
+      const response = await generateDestinationResponse(selectedCurrent, letter);
+      
+      setDestinationData(response);
+      setIsGenerating(false);
+    }
+  };
+
+  // Keep ref updated
+  useEffect(() => {
+    handleArrivalRef.current = handleArrival;
+  }, [selectedCurrent, letter]);
+
   // Travel Simulation Loop
   useEffect(() => {
     if (phase === 'TRAVEL_SIMULATION') {
@@ -35,8 +57,6 @@ const App: React.FC = () => {
         setTravelProgress(progress);
         
         // Random weather logic
-        // Reduced probability to 0.5% chance per tick to prevent rapid flickering
-        // 50ms ticks -> ~20 ticks/sec -> 0.5% = ~1 change every 10 seconds on average
         if (Math.random() < 0.005) {
           const rand = Math.random();
           if (rand < 0.6) setWeatherEffect('NONE');
@@ -47,23 +67,14 @@ const App: React.FC = () => {
         if (progress >= 100) {
           clearInterval(interval);
           setWeatherEffect('NONE'); // Clear weather on arrival
-          handleArrival();
+          // Call the function via ref to ensure we use the latest version/closure context
+          handleArrivalRef.current();
         }
       }, 50); // Update every 50ms
 
       return () => clearInterval(interval);
     }
   }, [phase]);
-
-  const handleArrival = async () => {
-    if (selectedCurrent && letter.content) {
-      setIsGenerating(true);
-      const response = await generateDestinationResponse(selectedCurrent, letter);
-      setDestinationData(response);
-      setIsGenerating(false);
-      setPhase('ARRIVAL');
-    }
-  };
 
   const resetGame = () => {
     setLetter({ senderName: letter.senderName, content: '' }); // Keep name
