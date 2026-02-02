@@ -30,6 +30,7 @@ const Globe3D: React.FC<Globe3DProps> = ({
 }) => {
   const globeEl = useRef<GlobeMethods | undefined>(undefined);
   const [hoveredPath, setHoveredPath] = useState<string | null>(null);
+  const [isGlobeReady, setIsGlobeReady] = useState(false);
 
   // Helper: Interpolate position along path
   const getBubblePosition = (currentId: string, progress: number) => {
@@ -95,16 +96,16 @@ const Globe3D: React.FC<Globe3DProps> = ({
         } catch (e) {}
       }
     } else if (globeEl.current && interactive) {
-       // Reset view
+       // Reset view for selection mode
        try {
-         globeEl.current.pointOfView({ lat: 20, lng: 0, altitude: 2.5 }, 1000);
+         // Don't force reset every render, only when switching to interactive
        } catch (e) {}
     }
   }, [selectedCurrentId, interactive, bubblePos]);
 
   // Configure controls (Auto-rotate & Smooth Zoom)
   useEffect(() => {
-    if (!globeEl.current) return;
+    if (!globeEl.current || !isGlobeReady) return;
     try {
       const controls = globeEl.current.controls();
       if (controls) {
@@ -113,15 +114,16 @@ const Globe3D: React.FC<Globe3DProps> = ({
         controls.enableZoom = true;
         controls.zoomSpeed = 0.5;
 
+        // Auto-rotate when not interactive (Intro/Write Letter) and not traveling (Follow Bubble)
         if (!interactive && !bubblePos) {
            controls.autoRotate = true;
-           controls.autoRotateSpeed = 0.5;
+           controls.autoRotateSpeed = 0.6; // Slow and gentle
         } else {
            controls.autoRotate = false;
         }
       }
     } catch (e) {}
-  }, [interactive, bubblePos]);
+  }, [interactive, bubblePos, isGlobeReady]);
 
 
   // Prepare data for rendering paths with multi-layer approach for flow visualization
@@ -208,40 +210,60 @@ const Globe3D: React.FC<Globe3DProps> = ({
      }));
   }, []);
 
-  // Bubble & Particles Visualization
+  // Bubble, Particles & START MARKERS Visualization
   const customObjectsData = useMemo(() => {
-    if (!bubblePos) return [];
-
     const objects = [];
 
-    // Main Bubble
-    objects.push({
-      type: 'bubble',
-      lat: bubblePos.lat,
-      lng: bubblePos.lng,
-      alt: bubblePos.alt,
-    });
-
-    // Particles (Plankton/Small bubbles)
-    // Reduce spread for tighter trail
-    for(let i=0; i<10; i++) {
+    // 1. Bubble & Particles (Travel Mode)
+    if (bubblePos) {
+      // Main Bubble
       objects.push({
-        type: 'particle',
-        lat: bubblePos.lat + (Math.random() - 0.5) * 0.5, // Reduced spread from 5 to 0.5
-        lng: bubblePos.lng + (Math.random() - 0.5) * 0.5,
-        alt: bubblePos.alt + (Math.random() - 0.5) * 0.02,
-        size: Math.random()
+        type: 'bubble',
+        lat: bubblePos.lat,
+        lng: bubblePos.lng,
+        alt: bubblePos.alt,
+      });
+
+      // Particles (Plankton/Small bubbles)
+      // Reduce spread for tighter trail
+      for(let i=0; i<10; i++) {
+        objects.push({
+          type: 'particle',
+          lat: bubblePos.lat + (Math.random() - 0.5) * 0.5, 
+          lng: bubblePos.lng + (Math.random() - 0.5) * 0.5,
+          alt: bubblePos.alt + (Math.random() - 0.5) * 0.02,
+          size: Math.random()
+        });
+      }
+    }
+
+    // 2. Start Markers (Selection Mode)
+    // Only show when interactive and not mid-travel
+    if (interactive && !bubblePos) {
+      OCEAN_CURRENTS.forEach(c => {
+        if (c.path.length > 0) {
+          objects.push({
+            type: 'start-marker',
+            id: c.id,
+            name: c.name,
+            lat: c.path[0].lat,
+            lng: c.path[0].lng,
+            alt: 0.02,
+            color: c.color
+          });
+        }
       });
     }
 
     return objects;
 
-  }, [bubblePos]);
+  }, [bubblePos, interactive]);
 
   return (
     <div className={`cursor-${interactive ? 'grab' : 'default'}`}>
       <Globe
         ref={globeEl}
+        onGlobeReady={() => setIsGlobeReady(true)}
         width={width}
         height={height}
         globeImageUrl="//unpkg.com/three-globe/example/img/earth-blue-marble.jpg"
@@ -292,7 +314,7 @@ const Globe3D: React.FC<Globe3DProps> = ({
         labelColor={() => 'rgba(255, 255, 255, 0.75)'}
         labelDotRadius={0.5}
 
-        // Custom HTML Elements (Bubble & Particles)
+        // Custom HTML Elements (Bubble & Particles & Start Markers)
         htmlElementsData={customObjectsData}
         htmlLat={(d: any) => d.lat}
         htmlLng={(d: any) => d.lng}
@@ -306,13 +328,45 @@ const Globe3D: React.FC<Globe3DProps> = ({
             el.style.textShadow = '0 0 10px cyan';
             el.style.animation = 'float 2s infinite ease-in-out';
             el.style.transform = 'translate(-50%, -50%)';
-          } else {
+          } else if (d.type === 'particle') {
             // Particle
             el.style.width = '4px';
             el.style.height = '4px';
             el.style.borderRadius = '50%';
             el.style.backgroundColor = 'rgba(100, 255, 255, 0.6)';
             el.style.boxShadow = '0 0 5px white';
+          } else if (d.type === 'start-marker') {
+             // START POINT MARKER
+             el.style.width = '24px';
+             el.style.height = '24px';
+             el.style.backgroundColor = d.color;
+             el.style.borderRadius = '50%';
+             el.style.border = '3px solid white';
+             el.style.boxShadow = '0 0 10px rgba(0,0,0,0.5)';
+             el.style.cursor = 'pointer';
+             el.style.transform = 'translate(-50%, -50%)';
+             el.title = `Start: ${d.name}`;
+             
+             // Pulse animation
+             const pulseColor = hexToRgba(d.color, 0.6);
+             const transparentColor = hexToRgba(d.color, 0);
+             
+             el.animate([
+               { boxShadow: `0 0 0 0px ${pulseColor}` },
+               { boxShadow: `0 0 0 15px ${transparentColor}` }
+             ], {
+               duration: 1500,
+               iterations: Infinity
+             });
+
+             // Click handler
+             el.onclick = (e) => {
+                e.stopPropagation();
+                if (onCurrentSelect) {
+                   const current = OCEAN_CURRENTS.find(c => c.id === d.id);
+                   if (current) onCurrentSelect(current);
+                }
+             };
           }
           
           return el;
