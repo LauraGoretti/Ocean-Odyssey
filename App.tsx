@@ -7,7 +7,7 @@ import SettingsModal, { GameSettings } from './components/SettingsModal';
 import { GamePhase, OceanCurrent, Letter, DestinationResponse, WeatherEffect, QuizQuestion } from './types';
 import { OCEAN_CURRENTS } from './data/oceanData';
 import { generateDestinationResponse } from './services/geminiService';
-import { Send, Map, Volume2, VolumeX, ArrowRight, Home, RefreshCw, Anchor, Settings } from 'lucide-react';
+import { Send, Map, Volume2, VolumeX, ArrowRight, Home, RefreshCw, Anchor, Settings, Lightbulb } from 'lucide-react';
 
 // --- SUB-COMPONENTS ---
 
@@ -18,15 +18,21 @@ const CurrentSelectionOverlay: React.FC<{
   onLaunch: () => void;
 }> = ({ selectedCurrent, onCancel, onLaunch }) => {
   return (
-    <div className="flex-1 flex flex-col justify-end pb-12 px-4 pointer-events-none">
-       <div className="pointer-events-auto self-center bg-white/90 backdrop-blur rounded-2xl p-6 shadow-2xl max-w-2xl w-full border-b-8 border-blue-500 text-center animate-slide-up">
+    <div className="flex-1 flex flex-col justify-end pb-4 px-4 pointer-events-none">
+       <div className="pointer-events-auto self-center bg-white/95 backdrop-blur-xl rounded-3xl p-4 shadow-[0_10px_40px_rgba(0,0,0,0.3)] max-w-lg w-full border-b-[6px] border-blue-500 text-center animate-slide-up transition-all">
           {!selectedCurrent ? (
-            <div className="text-center">
-              <h3 className="text-2xl font-bold text-blue-900 mb-2">Choose a Current!</h3>
-              <p className="text-slate-600">Spin the globe and click on a colorful stream to choose your path.</p>
-              <div className="mt-4 flex flex-wrap justify-center gap-2">
-                 <span className="text-xs bg-red-100 text-red-600 px-2 py-1 rounded-full font-bold">Warm Currents</span>
-                 <span className="text-xs bg-blue-100 text-blue-600 px-2 py-1 rounded-full font-bold">Cold Currents</span>
+            <div className="text-center py-2">
+              <h3 className="text-xl font-black text-blue-900 mb-1">Choose a Current!</h3>
+              <p className="text-sm text-slate-600 font-medium leading-snug">Spin the globe & tap a stream to explore.</p>
+              <div className="mt-3 flex justify-center gap-3">
+                 <div className="flex items-center gap-1.5 bg-red-50 px-2 py-1 rounded-lg border border-red-100">
+                    <div className="w-2 h-2 rounded-full bg-red-500"></div>
+                    <span className="text-[10px] uppercase font-bold text-red-600 tracking-wide">Warm</span>
+                 </div>
+                 <div className="flex items-center gap-1.5 bg-blue-50 px-2 py-1 rounded-lg border border-blue-100">
+                    <div className="w-2 h-2 rounded-full bg-blue-500"></div>
+                    <span className="text-[10px] uppercase font-bold text-blue-600 tracking-wide">Cold</span>
+                 </div>
               </div>
             </div>
           ) : (
@@ -59,18 +65,36 @@ const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [gameSettings, setGameSettings] = useState<GameSettings>({
     masterVolume: 0.5,
-    ambienceVolume: 0.5,
-    sfxVolume: 0.6,
+    bgmVolume: 0.5,     // Background (Deep Ocean)
+    streamVolume: 0.4,  // Current Flow
+    weatherVolume: 0.6, // Rain/Fog
+    animalVolume: 0.7,  // Animal Alerts
     reduceMotion: false,
     weatherEnabled: true
   });
 
-  // Audio Refs
+  // --- AUDIO REFS ---
   const audioCtxRef = useRef<AudioContext | null>(null);
   const mainGainRef = useRef<GainNode | null>(null);
+  
+  // Gain Nodes (Volume Control)
   const ambienceGainRef = useRef<GainNode | null>(null);
-  const rainGainRef = useRef<GainNode | null>(null);
-  const fogGainRef = useRef<GainNode | null>(null);
+  const streamGainRef = useRef<GainNode | null>(null);
+  const weatherGainRef = useRef<GainNode | null>(null);
+  const animalGainRef = useRef<GainNode | null>(null);
+
+  // Active Source Nodes (To allow stopping/swapping)
+  const ambienceSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const streamSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const weatherSourceRef = useRef<AudioBufferSourceNode | null>(null); // Replaces Rain+Fog if custom, or handles Rain
+  const fogSourceRef = useRef<AudioBufferSourceNode | null>(null);     // Synthetic Fog (extra layer)
+  
+  // Custom Audio Buffers (One-shot sounds)
+  const animalBufferRef = useRef<AudioBuffer | null>(null);
+
+  // Refs for callbacks to access current settings without stale closures
+  const settingsRef = useRef(gameSettings);
+  useEffect(() => { settingsRef.current = gameSettings; }, [gameSettings]);
 
   // Quiz State
   const [isQuizActive, setIsQuizActive] = useState(false);
@@ -90,158 +114,340 @@ const App: React.FC = () => {
 
   const handleArrival = async () => {
     if (selectedCurrent && letter.content) {
-      // Transition immediately to show loading screen
       setPhase('ARRIVAL'); 
       setIsGenerating(true);
-      
-      // Perform AI generation
       const response = await generateDestinationResponse(selectedCurrent, letter);
-      
       setDestinationData(response);
       setIsGenerating(false);
     }
   };
 
-  // Keep ref updated
   useEffect(() => {
     handleArrivalRef.current = handleArrival;
   }, [selectedCurrent, letter]);
 
-  // --- AUDIO SYSTEM ---
-  const initAudioSystem = () => {
-    if (audioCtxRef.current) return;
-    
-    // Cross-browser support
-    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-    const ctx = new AudioContext();
-    audioCtxRef.current = ctx;
+  // --- AUDIO HELPERS ---
 
-    // Master Gain (controls overall volume)
-    const mainGain = ctx.createGain();
-    mainGain.gain.value = 0; // Start silent, will be ramped up by useEffect
-    mainGain.connect(ctx.destination);
-    mainGainRef.current = mainGain;
+  // Helper: Load Audio from URL
+  const loadAudioBuffer = async (ctx: AudioContext, url: string): Promise<AudioBuffer | null> => {
+    try {
+      const response = await fetch(url);
+      const arrayBuffer = await response.arrayBuffer();
+      return await ctx.decodeAudioData(arrayBuffer);
+    } catch (e) {
+      console.error("Failed to load audio:", e);
+      return null;
+    }
+  };
 
-    // Ambience Gain (Dedicated channel for rumble)
-    const ambienceGain = ctx.createGain();
-    ambienceGain.gain.value = gameSettings.ambienceVolume;
-    ambienceGain.connect(mainGain);
-    ambienceGainRef.current = ambienceGain;
-
-    // --- SHARED NOISE BUFFERS ---
+  // Helper: Create Synthetic Brown Noise (Background)
+  const createSyntheticAmbience = (ctx: AudioContext): AudioBufferSourceNode => {
     const bufferSize = 2 * ctx.sampleRate;
-    
-    // 1. Brown Noise Buffer (Rumble)
-    const brownBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-    const brownData = brownBuffer.getChannelData(0);
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
     let lastOut = 0;
     for (let i = 0; i < bufferSize; i++) {
         const white = Math.random() * 2 - 1;
         lastOut = (lastOut + (0.02 * white)) / 1.02;
-        brownData[i] = lastOut * 3.5; 
-        brownData[i] *= 3.5; 
+        data[i] = lastOut * 3.5; 
+        data[i] *= 3.5; 
     }
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.loop = true;
+    return src;
+  };
 
-    // 2. White Noise Buffer (Rain/Fog base)
-    const whiteBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-    const whiteData = whiteBuffer.getChannelData(0);
+  // Helper: Create Synthetic White Noise (Stream/Rain)
+  const createSyntheticNoise = (ctx: AudioContext): AudioBufferSourceNode => {
+    const bufferSize = 2 * ctx.sampleRate;
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
     for (let i = 0; i < bufferSize; i++) {
-        whiteData[i] = Math.random() * 2 - 1;
+        data[i] = Math.random() * 2 - 1;
     }
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.loop = true;
+    return src;
+  };
+
+  // --- AUDIO SYSTEM INITIALIZATION ---
+  const initAudioSystem = () => {
+    if (audioCtxRef.current) return;
     
-    // --- SOUND SOURCE 1: AMBIENT RUMBLE ---
-    const rumbleSrc = ctx.createBufferSource();
-    rumbleSrc.buffer = brownBuffer;
-    rumbleSrc.loop = true;
-    const rumbleFilter = ctx.createBiquadFilter();
-    rumbleFilter.type = 'lowpass';
-    rumbleFilter.frequency.value = 400; // Deep rumble
-    rumbleSrc.connect(rumbleFilter);
-    rumbleFilter.connect(ambienceGain); // Connect to ambience gain, not main directly
-    rumbleSrc.start();
+    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+    const ctx = new AudioContext();
+    audioCtxRef.current = ctx;
 
-    // --- SOUND SOURCE 2: RAIN (High frequency splashing) ---
-    const rainSrc = ctx.createBufferSource();
-    rainSrc.buffer = whiteBuffer;
-    rainSrc.loop = true;
+    // Master Gain
+    const mainGain = ctx.createGain();
+    mainGain.gain.value = 0; 
+    mainGain.connect(ctx.destination);
+    mainGainRef.current = mainGain;
+
+    // Create Channel Gains
+    const mkGain = () => {
+        const g = ctx.createGain();
+        g.gain.value = 0;
+        g.connect(mainGain);
+        return g;
+    };
+
+    ambienceGainRef.current = mkGain();
+    streamGainRef.current = mkGain();
+    weatherGainRef.current = mkGain();
+    animalGainRef.current = mkGain();
     
-    const rainFilter = ctx.createBiquadFilter();
-    rainFilter.type = 'highpass';
-    rainFilter.frequency.value = 800; 
+    // Initial Sources are started by the Effects below
+  };
+
+  // --- SOURCE MANAGEMENT EFFECTS ---
+
+  // 1. Manage BACKGROUND Audio (Synthetic vs Custom)
+  useEffect(() => {
+    if (!audioCtxRef.current || !ambienceGainRef.current) return;
+    const ctx = audioCtxRef.current;
     
-    const rainSmooth = ctx.createBiquadFilter();
-    rainSmooth.type = 'lowpass';
-    rainSmooth.frequency.value = 8000;
+    const setupBg = async () => {
+        // Stop existing
+        if (ambienceSourceRef.current) {
+            try { ambienceSourceRef.current.stop(); } catch(e){}
+            ambienceSourceRef.current.disconnect();
+        }
 
-    const rainGain = ctx.createGain();
-    rainGain.gain.value = 0; 
+        let src: AudioBufferSourceNode;
 
-    rainSrc.connect(rainFilter);
-    rainFilter.connect(rainSmooth);
-    rainSmooth.connect(rainGain);
-    rainGain.connect(mainGain); // Rain/Fog go to Main, but controlled by own gain
-    rainSrc.start();
-    rainGainRef.current = rainGain;
+        if (gameSettings.customBackgroundAudio) {
+            const buffer = await loadAudioBuffer(ctx, gameSettings.customBackgroundAudio);
+            if (!buffer) return; // Fail gracefully
+            src = ctx.createBufferSource();
+            src.buffer = buffer;
+        } else {
+            // Synthetic Rumble
+            src = createSyntheticAmbience(ctx);
+            const filter = ctx.createBiquadFilter();
+            filter.type = 'lowpass';
+            filter.frequency.value = 400;
+            src.connect(filter);
+            filter.connect(ambienceGainRef.current!);
+            src.loop = true;
+            src.start();
+            ambienceSourceRef.current = src;
+            return; // Connected via filter
+        }
 
-    // --- SOUND SOURCE 3: FOG (Eerie Wind/Drone) ---
-    const fogSrc = ctx.createBufferSource();
-    fogSrc.buffer = whiteBuffer;
-    fogSrc.loop = true;
+        src.loop = true;
+        src.connect(ambienceGainRef.current!);
+        src.start();
+        ambienceSourceRef.current = src;
+    };
 
-    const fogFilter = ctx.createBiquadFilter();
-    fogFilter.type = 'bandpass';
-    fogFilter.frequency.value = 300; 
-    fogFilter.Q.value = 1.5;
+    setupBg();
+  }, [gameSettings.customBackgroundAudio, audioCtxRef.current]);
 
-    const fogGain = ctx.createGain();
-    fogGain.gain.value = 0; 
+  // 2. Manage STREAM Audio
+  useEffect(() => {
+    if (!audioCtxRef.current || !streamGainRef.current) return;
+    const ctx = audioCtxRef.current;
+    
+    const setupStream = async () => {
+        if (streamSourceRef.current) {
+            try { streamSourceRef.current.stop(); } catch(e){}
+            streamSourceRef.current.disconnect();
+        }
 
-    fogSrc.connect(fogFilter);
-    fogFilter.connect(fogGain);
-    fogGain.connect(mainGain);
-    fogSrc.start();
-    fogGainRef.current = fogGain;
+        let src: AudioBufferSourceNode;
+
+        if (gameSettings.customStreamAudio) {
+            const buffer = await loadAudioBuffer(ctx, gameSettings.customStreamAudio);
+            if (!buffer) return;
+            src = ctx.createBufferSource();
+            src.buffer = buffer;
+        } else {
+             // Synthetic Stream
+             src = createSyntheticNoise(ctx);
+             const filter = ctx.createBiquadFilter();
+             filter.type = 'bandpass';
+             filter.frequency.value = 500;
+             filter.Q.value = 0.5;
+             src.connect(filter);
+             filter.connect(streamGainRef.current!);
+             src.loop = true;
+             src.start();
+             streamSourceRef.current = src;
+             return;
+        }
+
+        src.loop = true;
+        src.connect(streamGainRef.current!);
+        src.start();
+        streamSourceRef.current = src;
+    };
+
+    setupStream();
+  }, [gameSettings.customStreamAudio, audioCtxRef.current]);
+
+  // 3. Manage WEATHER Audio (Replaces Rain/Fog if custom)
+  useEffect(() => {
+    if (!audioCtxRef.current || !weatherGainRef.current) return;
+    const ctx = audioCtxRef.current;
+    
+    const setupWeather = async () => {
+        // Stop existing weather nodes
+        if (weatherSourceRef.current) { try { weatherSourceRef.current.stop(); } catch(e){} weatherSourceRef.current.disconnect(); }
+        if (fogSourceRef.current) { try { fogSourceRef.current.stop(); } catch(e){} fogSourceRef.current.disconnect(); }
+
+        if (gameSettings.customWeatherAudio) {
+            // Custom Track: Replaces entire weather system
+            const buffer = await loadAudioBuffer(ctx, gameSettings.customWeatherAudio);
+            if (buffer) {
+                const src = ctx.createBufferSource();
+                src.buffer = buffer;
+                src.loop = true;
+                src.connect(weatherGainRef.current!);
+                src.start();
+                weatherSourceRef.current = src;
+            }
+        } else {
+             // Synthetic System: Rain + Fog
+             
+             // Rain Node
+             const rainSrc = createSyntheticNoise(ctx);
+             const rainFilter = ctx.createBiquadFilter();
+             rainFilter.type = 'highpass';
+             rainFilter.frequency.value = 800;
+             rainSrc.connect(rainFilter);
+             rainFilter.connect(weatherGainRef.current!);
+             rainSrc.start();
+             weatherSourceRef.current = rainSrc;
+
+             // Fog Node (Extra layer connected to same gain, or we could use separate gain for mixing)
+             // For simplicity, we connect Fog to the same weather gain, so volume controls both.
+             const fogSrc = createSyntheticNoise(ctx);
+             const fogFilter = ctx.createBiquadFilter();
+             fogFilter.type = 'bandpass';
+             fogFilter.frequency.value = 300; 
+             fogFilter.Q.value = 2.5; 
+             fogSrc.connect(fogFilter);
+             fogFilter.connect(weatherGainRef.current!); // Connects to same gain
+             fogSrc.start();
+             fogSourceRef.current = fogSrc;
+        }
+    };
+
+    setupWeather();
+  }, [gameSettings.customWeatherAudio, audioCtxRef.current]);
+
+  // 4. Manage ANIMAL Audio (Load buffer only)
+  useEffect(() => {
+      if (!audioCtxRef.current) return;
+      if (gameSettings.customAnimalAudio) {
+          loadAudioBuffer(audioCtxRef.current, gameSettings.customAnimalAudio).then(buf => {
+              animalBufferRef.current = buf;
+          });
+      } else {
+          animalBufferRef.current = null;
+      }
+  }, [gameSettings.customAnimalAudio, audioCtxRef.current]);
+
+
+  // --- PLAYBACK FUNCTIONS ---
+
+  const playAnimalSound = () => {
+      const ctx = audioCtxRef.current;
+      const gainNode = animalGainRef.current;
+      if (!ctx || !gainNode) return;
+
+      if (animalBufferRef.current) {
+          // Play Custom
+          const src = ctx.createBufferSource();
+          src.buffer = animalBufferRef.current;
+          src.connect(gainNode);
+          src.start();
+      } else {
+          // Play Synthetic (Chirp)
+          const osc = ctx.createOscillator();
+          const env = ctx.createGain();
+          
+          osc.type = 'sine';
+          const freq = 400 + Math.random() * 400;
+          osc.frequency.setValueAtTime(freq, ctx.currentTime);
+          osc.frequency.exponentialRampToValueAtTime(freq * 1.5, ctx.currentTime + 0.1); 
+
+          env.gain.setValueAtTime(0, ctx.currentTime);
+          env.gain.linearRampToValueAtTime(1.0, ctx.currentTime + 0.05);
+          env.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+
+          osc.connect(env);
+          env.connect(gainNode);
+
+          osc.start();
+          osc.stop(ctx.currentTime + 0.6);
+      }
+  };
+
+  const playCheckPointSound = () => {
+      const ctx = audioCtxRef.current;
+      const gainNode = mainGainRef.current;
+      if (!ctx || !gainNode) return;
+      
+      const osc = ctx.createOscillator();
+      const env = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(300, ctx.currentTime);
+      osc.frequency.linearRampToValueAtTime(600, ctx.currentTime + 0.2);
+      env.gain.setValueAtTime(0, ctx.currentTime);
+      env.gain.linearRampToValueAtTime(0.3, ctx.currentTime + 0.1);
+      env.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+      osc.connect(env);
+      env.connect(gainNode);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.5);
   };
 
   // Manage Audio Volume based on Game Phase, Weather AND Settings
   useEffect(() => {
     const ctx = audioCtxRef.current;
     const mainGain = mainGainRef.current;
-    const ambienceGain = ambienceGainRef.current;
-    const rainGain = rainGainRef.current;
-    const fogGain = fogGainRef.current;
     
     if (ctx && mainGain) {
         const now = ctx.currentTime;
         const isTraveling = phase === 'TRAVEL_SIMULATION';
         
         // 1. MASTER VOLUME
-        // If traveling, use setting value. If not traveling, silence.
-        // NOTE: We might want background sound in menu later, but for now stick to travel loop.
         const targetMaster = isTraveling ? gameSettings.masterVolume : 0;
         mainGain.gain.setTargetAtTime(targetMaster, now, 0.5);
 
-        // 2. AMBIENCE (Rumble) - Always active if master is up
-        if (ambienceGain) {
-          ambienceGain.gain.setTargetAtTime(gameSettings.ambienceVolume, now, 0.5);
+        // 2. BACKGROUND
+        if (ambienceGainRef.current) {
+          ambienceGainRef.current.gain.setTargetAtTime(gameSettings.bgmVolume, now, 0.5);
         }
-        
-        // 3. SFX (Rain/Fog)
-        if (rainGain && fogGain) {
-            // Rain Volume Logic
-            const targetRain = (isTraveling && weatherEffect === 'RAIN') 
-                ? Math.max(0, weatherIntensity * gameSettings.sfxVolume) 
-                : 0;
-            rainGain.gain.setTargetAtTime(targetRain, now, 1.0); 
 
-            // Fog Volume Logic
-            const targetFog = (isTraveling && weatherEffect === 'FOG') 
-                ? Math.max(0, weatherIntensity * gameSettings.sfxVolume * 1.5) // Fog needs boost
-                : 0;
-            fogGain.gain.setTargetAtTime(targetFog, now, 2.5); 
+        // 3. STREAM
+        if (streamGainRef.current) {
+           const streamVal = isTraveling ? gameSettings.streamVolume : 0;
+           streamGainRef.current.gain.setTargetAtTime(streamVal, now, 0.8);
         }
         
-        // Resume context if needed
+        // 4. WEATHER
+        if (weatherGainRef.current) {
+            let targetWeather = 0;
+            // If custom weather audio is set, it plays whenever weather is active (rain OR fog)
+            // If synthetic, it handles mixing implicitly by connecting rain/fog nodes to this gain.
+            // We just control the master weather gain here based on intensity.
+            
+            if (isTraveling && weatherEffect !== 'NONE') {
+                targetWeather = Math.max(0, weatherIntensity * gameSettings.weatherVolume);
+            }
+            weatherGainRef.current.gain.setTargetAtTime(targetWeather, now, 1.5);
+        }
+
+        // 5. ANIMALS
+        if (animalGainRef.current) {
+            animalGainRef.current.gain.value = gameSettings.animalVolume;
+        }
+        
         if (targetMaster > 0 && ctx.state === 'suspended') {
             ctx.resume();
         }
@@ -259,14 +465,21 @@ const App: React.FC = () => {
         setTravelProgress(prev => {
            const newProgress = prev + 0.08;
 
+           // --- SOUND TRIGGERS FOR ANIMALS ---
+           if ((prev < 20 && newProgress >= 20) || 
+               (prev < 50 && newProgress >= 50) || 
+               (prev < 80 && newProgress >= 80)) {
+               playAnimalSound();
+           }
+
            // QUIZ TRIGGER LOGIC
            const checkpoints = [35, 70];
-           
            const hitCheckpoint = checkpoints.find(cp => 
                newProgress >= cp && prev < cp && !triggeredCheckpoints.includes(cp)
            );
 
            if (hitCheckpoint && selectedCurrent && selectedCurrent.quizzes.length > 0) {
+               playCheckPointSound();
                const availableQuizzes = selectedCurrent.quizzes.filter(q => !shownQuizIds.includes(q.id));
                const pool = availableQuizzes.length > 0 ? availableQuizzes : selectedCurrent.quizzes;
                const quizIndex = Math.floor(Math.random() * pool.length);
@@ -289,7 +502,7 @@ const App: React.FC = () => {
            return newProgress;
         });
 
-        // Weather Logic - Only if enabled in settings
+        // Weather Logic
         if (gameSettings.weatherEnabled && Math.random() < 0.005) {
           const rand = Math.random();
           if (rand < 0.6) {
@@ -315,10 +528,9 @@ const App: React.FC = () => {
 
       return () => clearInterval(interval);
     }
-  }, [phase, isQuizActive, selectedCurrent, triggeredCheckpoints, shownQuizIds, gameSettings.weatherEnabled, weatherEffect]);
+  }, [phase, isQuizActive, selectedCurrent, triggeredCheckpoints, shownQuizIds, gameSettings.weatherEnabled, weatherEffect, gameSettings.animalVolume]);
 
   const returnToMap = () => {
-    // Reset simulation state but keep letter
     setTravelProgress(0);
     setSelectedCurrent(null);
     setDestinationData(null);
@@ -368,7 +580,6 @@ const App: React.FC = () => {
               OCEAN ODYSSEY
             </h1>
             <div className="flex gap-2">
-               {/* Back to Map Button - Visible during Travel */}
                {phase === 'TRAVEL_SIMULATION' && (
                   <button 
                     onClick={returnToMap}
@@ -482,28 +693,52 @@ const App: React.FC = () => {
           {/* 5. ARRIVAL & RESULT */}
           {phase === 'ARRIVAL' && (
             <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-lg pointer-events-auto overflow-hidden">
-               {/* ... (Animation styles kept same) ... */}
+               {/* Animation Styles */}
                <style>{`
-                 @keyframes swimAcross {
-                   0% { transform: translateX(-20vw) translateY(0) rotate(5deg); opacity: 0; }
-                   10% { opacity: 0.2; }
-                   90% { opacity: 0.2; }
-                   100% { transform: translateX(120vw) translateY(20px) rotate(-5deg); opacity: 0; }
-                 }
                  @keyframes popIn {
                    0% { transform: scale(0.5); opacity: 0; }
                    70% { transform: scale(1.05); opacity: 1; }
                    100% { transform: scale(1); }
                  }
+                 @keyframes gentlePulse {
+                   0%, 100% { transform: scale(1); opacity: 0.4; }
+                   50% { transform: scale(1.3); opacity: 0.8; }
+                 }
+                 @keyframes swimInRight {
+                   0% { transform: translateX(-100px) rotate(-20deg); opacity: 0; }
+                   100% { transform: translateX(0) rotate(0deg); opacity: 1; }
+                 }
+                 @keyframes swimInLeft {
+                   0% { transform: translateX(100px) rotate(20deg); opacity: 0; }
+                   100% { transform: translateX(0) rotate(0deg); opacity: 1; }
+                 }
+                 @keyframes floatY {
+                   0%, 100% { transform: translateY(0); }
+                   50% { transform: translateY(-10px); }
+                 }
                `}</style>
                
-               {/* Only show background effects if not reduced motion */}
+               {/* Enhanced Background Celebration */}
                {!gameSettings.reduceMotion && !isGenerating && destinationData && (
                  <div className="absolute inset-0 pointer-events-none overflow-hidden">
-                    {/* Simplified confetti loop */}
-                    {[...Array(20)].map((_, i) => (
-                      <div key={i} className="absolute text-3xl animate-pulse" style={{left: `${Math.random()*100}%`, top: `${Math.random()*100}%`}}>🎉</div>
-                    ))}
+                    {[...Array(25)].map((_, i) => {
+                      const emojis = ['🎉', '🫧', '✨', '🐚', '🎊'];
+                      const emoji = emojis[i % emojis.length];
+                      return (
+                        <div 
+                          key={i} 
+                          className="absolute text-3xl select-none" 
+                          style={{
+                            left: `${Math.random()*100}%`, 
+                            top: `${Math.random()*100}%`,
+                            animation: `gentlePulse ${2 + Math.random() * 2}s infinite ease-in-out`,
+                            animationDelay: `${Math.random() * 2}s`
+                          }}
+                        >
+                          {emoji}
+                        </div>
+                      );
+                    })}
                  </div>
                )}
 
@@ -514,47 +749,79 @@ const App: React.FC = () => {
                     <p className="animate-pulse text-xl text-cyan-100">Knocking on doors in {selectedCurrent?.endLocation}...</p>
                  </div>
                ) : destinationData && (
-                 <div className="bg-white/95 backdrop-blur-xl rounded-3xl shadow-[0_0_60px_rgba(6,182,212,0.6)] max-w-2xl w-full flex flex-col max-h-[90vh] border-4 border-cyan-300 relative z-10 transform" style={{ animation: gameSettings.reduceMotion ? 'none' : 'popIn 0.6s' }}>
+                 <div className="bg-white/95 backdrop-blur-xl rounded-3xl shadow-[0_0_60px_rgba(6,182,212,0.6)] max-w-2xl w-full flex flex-col max-h-[90vh] border-4 border-cyan-300 relative z-10 transform overflow-hidden" style={{ animation: gameSettings.reduceMotion ? 'none' : 'popIn 0.6s cubic-bezier(0.34, 1.56, 0.64, 1)' }}>
                     
                     <div className="bg-gradient-to-r from-cyan-500 via-blue-500 to-indigo-600 p-8 text-white text-center relative overflow-hidden shrink-0">
+                       
+                       {/* Background Pattern */}
+                       <div className="absolute inset-0 opacity-10 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-white via-transparent to-transparent" />
+
+                       {/* Marine Life Swim-In Animation */}
+                       {!gameSettings.reduceMotion && selectedCurrent?.biodiversity && (
+                          <>
+                            {selectedCurrent.biodiversity.slice(0, 4).map((animal, idx) => {
+                               const isLeft = idx % 2 === 0;
+                               return (
+                                 <div 
+                                    key={`swim-${idx}`}
+                                    className="absolute text-5xl filter drop-shadow-lg z-0 opacity-0" 
+                                    style={{
+                                       top: `${15 + idx * 20}%`,
+                                       left: isLeft ? '5%' : 'auto',
+                                       right: isLeft ? 'auto' : '5%',
+                                       animation: `${isLeft ? 'swimInRight' : 'swimInLeft'} 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards, floatY 3s ease-in-out infinite ${0.8 + idx * 0.2}s`,
+                                       animationDelay: `${0.2 + idx * 0.15}s` // Staggered entrance
+                                    }}
+                                    title={animal.name}
+                                 >
+                                    {animal.emoji}
+                                 </div>
+                               );
+                            })}
+                          </>
+                       )}
+
                        <h2 className="text-4xl md:text-5xl font-black relative z-10 drop-shadow-lg mb-2">Message Received!</h2>
-                       <div className="inline-block bg-white/20 px-5 py-2 rounded-full backdrop-blur-md border border-white/30">
-                         <p className="font-bold relative z-10 flex items-center gap-2">
+                       <div className="inline-block bg-white/20 px-5 py-2 rounded-full backdrop-blur-md border border-white/30 relative z-10">
+                         <p className="font-bold flex items-center gap-2">
                             <Map size={18} className="text-yellow-300" /> 
                             <span>{destinationData.location}</span>
                          </p>
                        </div>
                     </div>
                     
-                    <div className="p-6 md:p-8 overflow-y-auto bg-slate-50">
-                       <div className="bg-amber-50 border-l-8 border-amber-400 p-5 mb-6 rounded-r-xl">
+                    <div className="p-6 md:p-8 overflow-y-auto bg-slate-50 custom-scrollbar flex-1">
+                       <div className="bg-amber-50 border-l-8 border-amber-400 p-5 mb-6 rounded-r-xl shadow-sm">
                           <p className="text-slate-700 italic text-lg">"{letter.content}"</p>
                        </div>
                        <div className="prose prose-lg text-slate-700 mb-8">
                           {destinationData.replyText.split('\n').map((line, i) => (
-                             <p key={i} className="mb-3">{line}</p>
+                             <p key={i} className="mb-3 leading-relaxed">{line}</p>
                           ))}
                        </div>
-                       <div className="bg-blue-100 rounded-2xl p-5 mb-8 border border-blue-200">
-                          <h4 className="font-black text-blue-800 text-sm uppercase mb-1">Did you know?</h4>
-                          <p className="text-blue-900">{destinationData.funFact}</p>
+                       <div className="bg-blue-100 rounded-2xl p-5 mb-8 border border-blue-200 shadow-inner">
+                          <h4 className="font-black text-blue-800 text-sm uppercase mb-1 flex items-center gap-2">
+                             <Lightbulb size={16} /> Did you know?
+                          </h4>
+                          <p className="text-blue-900 font-medium">{destinationData.funFact}</p>
                        </div>
-                       
-                       <div className="flex flex-col md:flex-row gap-3">
+                    </div>
+
+                    {/* Fixed Footer for Buttons */}
+                    <div className="p-5 bg-slate-50 border-t border-slate-200 shrink-0 flex flex-col md:flex-row gap-3">
                            <button 
                              onClick={returnToMap}
-                             className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-lg py-4 rounded-xl shadow transition-all flex items-center justify-center gap-2"
+                             className="flex-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-bold text-lg py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2"
                            >
                              <Map size={20} /> Map
                            </button>
 
                            <button 
                              onClick={resetGame}
-                             className="flex-[2] bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-xl py-4 rounded-xl shadow-lg transition-all hover:shadow-cyan-500/50 flex items-center justify-center gap-3"
+                             className="flex-[2] bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-xl py-3 rounded-xl shadow-lg transition-all hover:shadow-cyan-500/50 flex items-center justify-center gap-3 transform hover:scale-[1.02] active:scale-95"
                            >
                              <RefreshCw size={24} /> New Letter
                            </button>
-                       </div>
                     </div>
                  </div>
                )}

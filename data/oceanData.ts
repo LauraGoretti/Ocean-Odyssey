@@ -42,6 +42,10 @@ export const OCEAN_CURRENTS: OceanCurrent[] = [
         correctAnswer: 1,
         fact: 'Sea Turtles use the current like a super-highway to travel long distances without swimming hard.'
       }
+    ],
+    funFacts: [
+      'It transports more water than all the world\'s rivers combined!',
+      'Benjamin Franklin created one of the first maps of it to help ships deliver mail faster.'
     ]
   },
   {
@@ -81,6 +85,10 @@ export const OCEAN_CURRENTS: OceanCurrent[] = [
         correctAnswer: 1,
         fact: 'It flows right past Japan, bringing warm water that helps coral reefs grow there.'
       }
+    ],
+    funFacts: [
+      'Its name means "Black Stream" because of its deep, dark blue color.',
+      'It helps warm coral reefs grow much further north in Japan than they usually would!'
     ]
   },
   {
@@ -120,6 +128,10 @@ export const OCEAN_CURRENTS: OceanCurrent[] = [
         correctAnswer: 0,
         fact: 'Yes! Even though it is near the equator, the Galapagos Penguin lives here because the water is cold.'
       }
+    ],
+    funFacts: [
+      'It is the most productive marine ecosystem in the world, producing more fish than anywhere else!',
+      'Penguins can live right on the equator in the Galapagos because this current keeps the water so cold.'
     ]
   },
   {
@@ -159,6 +171,10 @@ export const OCEAN_CURRENTS: OceanCurrent[] = [
         correctAnswer: 1,
         fact: 'It starts at the largest coral reef system in the world!'
       }
+    ],
+    funFacts: [
+      'It can be up to 100 kilometers wide and 500 meters deep!',
+      'In the summer, it flows much stronger and faster than in the winter.'
     ]
   },
   {
@@ -198,6 +214,10 @@ export const OCEAN_CURRENTS: OceanCurrent[] = [
         correctAnswer: 0,
         fact: 'Billions of Sardines travel together here, creating a huge underwater buffet for predators!'
       }
+    ],
+    funFacts: [
+      'It is one of the fastest and strongest currents in the entire world.',
+      'Where it meets the Atlantic Ocean, it creates massive "rogue waves" that can be 30 meters high!'
     ]
   },
   {
@@ -237,6 +257,10 @@ export const OCEAN_CURRENTS: OceanCurrent[] = [
         correctAnswer: 1,
         fact: 'They wrap themselves in giant kelp seaweed so they don\'t drift away while napping!'
       }
+    ],
+    funFacts: [
+      'It acts like a giant air conditioner for the coast, keeping summers cool and foggy.',
+      'The cold water brings up nutrients from the deep, helping giant kelp forests grow faster than trees!'
     ]
   }
 ];

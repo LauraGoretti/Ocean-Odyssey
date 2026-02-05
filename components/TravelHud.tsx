@@ -50,60 +50,76 @@ const TravelHud: React.FC<TravelHudProps> = ({
     let animationFrameId: number;
     let w = canvas.width;
     let h = canvas.height;
+    let time = 0;
 
-    type ParticleType = 'RAIN' | 'LENS_DROP' | 'SNOW';
+    type ParticleType = 'RAIN' | 'LENS_DROP' | 'FOG';
     interface Particle {
       x: number;
       y: number;
-      z: number; 
+      z: number; // depth 0 (far) to 1 (close)
+      vx: number; // velocity x
+      vy: number; // velocity y
       size: number;
-      speed: number;
       opacity: number;
       type: ParticleType;
-      driftOffset?: number;
+      phase: number; // For fog sine wave movement
     }
 
     const particles: Particle[] = [];
     
-    const spawnParticle = (randomY = false) => {
+    const spawnParticle = (initial = false) => {
       const currentIntensity = intensityRef.current;
       const type: ParticleType = weather === 'RAIN' 
         ? (Math.random() > 0.97 ? 'LENS_DROP' : 'RAIN') 
-        : 'SNOW';
+        : 'FOG';
 
       const z = Math.random(); 
-      let p: Particle = {
+      
+      const p: Particle = {
         x: Math.random() * w,
-        y: randomY ? Math.random() * h : -100,
+        y: initial ? Math.random() * h : -50,
         z,
-        type,
+        vx: 0,
+        vy: 0,
         size: 0,
-        speed: 0,
         opacity: 0,
-        driftOffset: 0
+        type,
+        phase: Math.random() * Math.PI * 2
       };
 
       if (type === 'RAIN') {
-        const speedVar = 0.8 + Math.random() * 0.4; 
-        p.speed = (20 + z * 15) * speedVar * (0.8 + currentIntensity * 0.4); 
-        const sizeVar = 0.8 + Math.random() * 0.5;
-        p.size = (25 + z * 35) * sizeVar; 
-        p.opacity = (0.3 + z * 0.5) * Math.min(1, currentIntensity + 0.2);
-        p.driftOffset = (Math.random() - 0.5) * 2; 
+        // Rain Physics: High gravity effect, wind resistance
+        const baseSpeed = 20; 
+        const speedVar = 15;
+        // Closer particles (z=1) fall faster visually
+        p.vy = (baseSpeed + z * speedVar) * (1 + currentIntensity * 0.2); 
+        
+        // Wind: Constant force + turbulence
+        const windBase = -2; // Blowing left
+        p.vx = windBase * (1 + z) * (0.8 + currentIntensity * 0.5);
+
+        // Size correlates with depth for perspective
+        p.size = (15 + z * 25); 
+        p.opacity = (0.3 + z * 0.4) * Math.min(1, currentIntensity + 0.3);
+
       } else if (type === 'LENS_DROP') {
-        p.y = randomY ? Math.random() * h : Math.random() * h * 0.5;
-        p.speed = 0.5 + Math.random(); 
+        // Drops on the "camera lens"
+        p.y = initial ? Math.random() * h : Math.random() * h * 0.5;
+        p.vy = 0.5 + Math.random() * 2; 
+        p.vx = 0;
         p.size = 2 + Math.random() * 4; 
-        p.opacity = (0.6 + Math.random() * 0.4) * currentIntensity;
-      } else if (type === 'SNOW') {
-        p.speed = 0.2 + z * 0.8;
-        p.size = 1 + z * 3;
-        p.opacity = (0.2 + z * 0.5) * currentIntensity;
-        p.driftOffset = Math.random() * Math.PI * 2;
+        p.opacity = (0.5 + Math.random() * 0.5) * currentIntensity;
+
+      } else if (type === 'FOG') {
+        // Fog Physics: Floating, Brownian-like motion
+        p.y = Math.random() * h; // Spawn anywhere for initial fill
+        p.vx = (Math.random() - 0.5) * 0.8; // Gentle drift
+        p.vy = (Math.random() - 0.5) * 0.4; // Neutral buoyancy
+        p.size = 50 + z * 150; // Large soft puffs
+        p.opacity = (0.05 + z * 0.15) * currentIntensity; // Very subtle
       }
       
-      if (!randomY) particles.push(p);
-      else particles[particles.length] = p; 
+      particles.push(p);
     };
 
     const resize = () => {
@@ -113,7 +129,9 @@ const TravelHud: React.FC<TravelHudProps> = ({
         h = canvas.height;
         particles.length = 0; // Clear on resize
         if (weather !== 'NONE') {
-             for(let i=0; i<50; i++) spawnParticle(true);
+             // Initial population
+             const count = weather === 'RAIN' ? 100 : 40;
+             for(let i=0; i<count; i++) spawnParticle(true);
         }
     };
 
@@ -126,16 +144,17 @@ const TravelHud: React.FC<TravelHudProps> = ({
             return;
         }
 
+        time += 0.015;
         const currentIntensity = intensityRef.current;
         ctx.clearRect(0, 0, w, h);
         
         let targetParticles = 0;
-        if (weather === 'RAIN') targetParticles = Math.floor(50 + currentIntensity * 350);
-        else if (weather === 'FOG') targetParticles = Math.floor(50 + currentIntensity * 200);
+        if (weather === 'RAIN') targetParticles = Math.floor(80 + currentIntensity * 350);
+        else if (weather === 'FOG') targetParticles = Math.floor(30 + currentIntensity * 50);
 
         if (particles.length < targetParticles) {
-            const spawnRate = Math.ceil((targetParticles - particles.length) / 10);
-            for(let i=0; i<spawnRate; i++) spawnParticle(false);
+            const spawnRate = Math.ceil((targetParticles - particles.length) / 8);
+            for(let i=0; i<spawnRate; i++) spawnParticle();
         } else if (particles.length > targetParticles) {
             particles.splice(0, particles.length - targetParticles);
         }
@@ -149,54 +168,85 @@ const TravelHud: React.FC<TravelHudProps> = ({
             const p = particles[i];
 
             if (p.type === 'RAIN') {
-                const windX = (-3 * p.z) + (p.driftOffset || 0);
-                const grad = ctx.createLinearGradient(p.x, p.y, p.x + windX, p.y + p.size);
-                grad.addColorStop(0, `rgba(200, 240, 255, 0)`);
-                grad.addColorStop(1, `rgba(220, 245, 255, ${p.opacity})`);
+                // Apply Forces
+                const turbulence = Math.sin(time * 5 + p.z * 10) * 0.5;
+                p.x += p.vx + turbulence;
+                p.y += p.vy;
+
+                // Draw: Motion blurred streak
+                const trailLen = p.size * (1 + p.vy * 0.08);
+                const windTilt = p.vx * 2;
+
+                const grad = ctx.createLinearGradient(p.x, p.y, p.x - windTilt, p.y - trailLen);
+                grad.addColorStop(0, `rgba(220, 245, 255, ${p.opacity})`);
+                grad.addColorStop(1, `rgba(220, 245, 255, 0)`);
+                
                 ctx.strokeStyle = grad;
                 ctx.lineWidth = 1 + p.z * 1.5;
                 ctx.lineCap = 'round';
                 ctx.beginPath();
                 ctx.moveTo(p.x, p.y);
-                ctx.lineTo(p.x + windX, p.y + p.size);
+                ctx.lineTo(p.x - windTilt, p.y - trailLen);
                 ctx.stroke();
 
-                p.y += p.speed;
-                p.x += windX;
+                // Recycle Logic
+                if (p.y > h + 100 || p.x < -100 || p.x > w + 100) {
+                   p.y = -50 - Math.random() * 50;
+                   p.x = Math.random() * (w + 200) - 50; 
+                   // Reset velocities for variety
+                   const newZ = Math.random();
+                   p.z = newZ;
+                   p.vy = (20 + newZ * 15) * (1 + currentIntensity * 0.2); 
+                   p.vx = -2 * (1 + newZ) * (0.8 + currentIntensity * 0.5);
+                   p.size = (15 + newZ * 25);
+                   p.opacity = (0.3 + newZ * 0.4) * Math.min(1, currentIntensity + 0.3);
+                }
+
             } else if (p.type === 'LENS_DROP') {
+                p.y += p.vy;
+                p.opacity -= 0.003;
+
                 ctx.fillStyle = `rgba(255, 255, 255, ${p.opacity})`;
                 ctx.beginPath();
                 ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
                 ctx.fill();
-                p.y += p.speed;
-                p.opacity -= 0.005;
-            } else if (p.type === 'SNOW') {
-                const drift = Math.sin((Date.now() * 0.001) + (p.driftOffset || 0)) * 0.5;
-                ctx.fillStyle = `rgba(220, 255, 255, ${p.opacity})`;
+                
+                // Recycle as rain if gone
+                if (p.opacity <= 0 || p.y > h) {
+                    p.type = 'RAIN'; 
+                    p.y = -50;
+                    p.opacity = 0; // Will be reset on next rain recycle logic or we can just reset here
+                    p.x = Math.random() * w;
+                    // Properly re-init as rain to avoid glitch
+                    const newZ = Math.random();
+                    p.z = newZ;
+                    p.vy = (20 + newZ * 15);
+                    p.vx = -2;
+                    p.size = 20;
+                    p.opacity = 0.5;
+                }
+
+            } else if (p.type === 'FOG') {
+                // Flowing movement
+                const drift = Math.sin(time * 0.5 + p.phase) * (0.5 + p.z);
+                p.x += p.vx + drift;
+                p.y += p.vy + Math.cos(time * 0.3 + p.phase) * 0.2;
+
+                // Screen Wrap
+                if (p.x > w + 100) p.x = -100;
+                if (p.x < -100) p.x = w + 100;
+                if (p.y > h + 100) p.y = -100;
+                if (p.y < -100) p.y = h + 100;
+
+                // Draw Soft Radial
+                const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.size);
+                grad.addColorStop(0, `rgba(220, 255, 255, ${p.opacity})`);
+                grad.addColorStop(1, `rgba(220, 255, 255, 0)`);
+                
+                ctx.fillStyle = grad;
                 ctx.beginPath();
                 ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
                 ctx.fill();
-                p.y += p.speed;
-                p.x += drift;
-            }
-
-            if (p.y > h + 50 || p.x < -50 || p.opacity <= 0) {
-               const z = Math.random();
-               if (p.type === 'RAIN') {
-                  p.x = Math.random() * (w + 100);
-                  p.y = -100 - Math.random() * 50;
-                  p.z = z;
-                  p.speed = (20 + z * 15) * (0.8 + Math.random() * 0.4) * (0.8 + currentIntensity * 0.4);
-                  p.size = (25 + z * 35) * (0.8 + Math.random() * 0.5);
-                  p.opacity = (0.3 + z * 0.5) * Math.min(1, currentIntensity + 0.2);
-               } else if (p.type === 'LENS_DROP') {
-                   p.type = 'RAIN'; 
-                   p.y = -50;
-               } else if (p.type === 'SNOW') {
-                   p.y = -10;
-                   p.x = Math.random() * w;
-                   p.opacity = (0.2 + z * 0.5) * currentIntensity;
-               }
             }
         }
         animationFrameId = requestAnimationFrame(render);
@@ -267,7 +317,7 @@ const TravelHud: React.FC<TravelHudProps> = ({
         }
       `}</style>
       
-      {/* WEATHER: FOG */}
+      {/* WEATHER: FOG OVERLAY (Backdrop) */}
       {weatherEnabled && (
         <div 
             className={`absolute inset-0 transition-all duration-1000`}

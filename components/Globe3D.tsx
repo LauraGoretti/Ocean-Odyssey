@@ -106,13 +106,14 @@ const Globe3D: React.FC<Globe3DProps> = ({
         
         // Offset latitude to shift current upwards in the viewport (to clear bottom modal)
         // Subtracting from latitude moves camera south, which shifts the object UP on the screen.
-        const latOffset = -20; 
+        // Adjusted to -35 to ensure detailed card does not cover the current
+        const latOffset = -35; 
 
         try {
           globeEl.current.pointOfView({ 
             lat: centerLat + latOffset, 
             lng: centerLng, 
-            altitude: 2.1 // Slightly zoomed out to see full context
+            altitude: 2.3 // Slightly zoomed out to ensure full path visibility
           }, 1000);
         } catch (e) {}
       }
@@ -428,12 +429,14 @@ const Globe3D: React.FC<Globe3DProps> = ({
              el.style.transform = 'translate(-50%, -50%)';
              el.title = `Start: ${d.name}`;
              
-             // Pulse animation
+             // Pulse animation (Idle)
              const pulseColor = hexToRgba(d.color, 0.6);
              const transparentColor = hexToRgba(d.color, 0);
              
+             let idleAnimation: Animation | undefined;
+
              if (!reduceMotion) {
-                el.animate([
+                idleAnimation = el.animate([
                     { boxShadow: `0 0 0 0px ${pulseColor}` },
                     { boxShadow: `0 0 0 15px ${transparentColor}` }
                 ], {
@@ -445,9 +448,26 @@ const Globe3D: React.FC<Globe3DProps> = ({
              // Click handler
              el.onclick = (e) => {
                 e.stopPropagation();
-                // Trigger ripple here too
-                setRippleData([{ lat: d.lat, lng: d.lng }]);
-                setTimeout(() => setRippleData([]), 1500);
+
+                // Flash & Pulse Animation on Click
+                if (!reduceMotion) {
+                   if (idleAnimation) idleAnimation.cancel();
+                   
+                   el.animate([
+                       { transform: 'translate(-50%, -50%) scale(1)', backgroundColor: d.color, filter: 'brightness(1)', boxShadow: `0 0 0 0px ${pulseColor}` },
+                       { transform: 'translate(-50%, -50%) scale(1.4)', backgroundColor: '#ffffff', filter: 'brightness(2)', boxShadow: '0 0 20px 5px rgba(255,255,255,0.8)' },
+                       { transform: 'translate(-50%, -50%) scale(1)', backgroundColor: d.color, filter: 'brightness(1)', boxShadow: `0 0 0 0px ${pulseColor}` }
+                   ], {
+                       duration: 300,
+                       easing: 'ease-out'
+                   });
+                }
+                
+                // Trigger ripple slightly delayed to start after the expansion begins
+                setTimeout(() => {
+                    setRippleData([{ lat: d.lat, lng: d.lng }]);
+                    setTimeout(() => setRippleData([]), 1500);
+                }, 150);
 
                 // Add delay before showing card to let ripple effect be seen
                 setTimeout(() => {
@@ -455,7 +475,7 @@ const Globe3D: React.FC<Globe3DProps> = ({
                        const current = OCEAN_CURRENTS.find(c => c.id === d.id);
                        if (current) onCurrentSelect(current);
                     }
-                }, 500);
+                }, 600);
              };
           }
           

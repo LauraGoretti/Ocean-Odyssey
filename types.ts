@@ -34,6 +34,7 @@ export interface OceanCurrent {
   avgSpeed: string; // e.g., "2 m/s"
   biodiversity: MarineLife[];
   quizzes: QuizQuestion[];
+  funFacts: string[];
 }
 
 export interface Letter {
