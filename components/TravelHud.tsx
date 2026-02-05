@@ -1,24 +1,37 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { OceanCurrent, MarineLife, WeatherEffect } from '../types';
-import { Thermometer, Timer, Waves, Lightbulb, CloudRain, CloudFog } from 'lucide-react';
+import { Thermometer, Timer, Waves, Lightbulb, CloudRain, CloudFog, Zap } from 'lucide-react';
 import BubblesOverlay from './BubblesOverlay';
 
 interface TravelHudProps {
   current: OceanCurrent;
   progress: number; // 0 to 100
   weather?: WeatherEffect;
+  intensity?: number; // 0.0 to 1.0, controls strength of effect
+  reduceMotion?: boolean;
+  weatherEnabled?: boolean;
 }
 
-const TravelHud: React.FC<TravelHudProps> = ({ current, progress, weather = 'NONE' }) => {
+const TravelHud: React.FC<TravelHudProps> = ({ 
+    current, 
+    progress, 
+    weather = 'NONE', 
+    intensity = 0.5,
+    reduceMotion = false,
+    weatherEnabled = true 
+}) => {
   const [activeAnimal, setActiveAnimal] = useState<MarineLife | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [lightningFlash, setLightningFlash] = useState(0); 
   
-  // Dynamic stats simulation
-  const depth = Math.max(0, Math.sin(progress * Math.PI) * 2000 + 50); // Simulates going deep and coming back up
-  const temperature = parseFloat(current.avgTemp) - (depth / 500); // Colder as it gets deeper
-  const brightness = Math.max(0, 100 - (depth / 10)); // Darker as it gets deeper
+  const intensityRef = useRef(intensity);
+  useEffect(() => { intensityRef.current = intensity; }, [intensity]);
 
-  // Show animals at specific progress points
+  // Dynamic stats
+  const depth = Math.max(0, Math.sin(progress * Math.PI) * 2000 + 50); 
+  const temperature = parseFloat(current.avgTemp) - (depth / 500); 
+  const brightness = Math.max(0, 100 - (depth / 10)); 
+
   useEffect(() => {
     if (progress > 20 && progress < 30) setActiveAnimal(current.biodiversity[0]);
     else if (progress > 50 && progress < 60) setActiveAnimal(current.biodiversity[1]);
@@ -26,10 +39,9 @@ const TravelHud: React.FC<TravelHudProps> = ({ current, progress, weather = 'NON
     else setActiveAnimal(null);
   }, [progress, current]);
 
-  // --- WEATHER EFFECTS SYSTEM (CANVAS & CSS) ---
+  // --- WEATHER EFFECTS SYSTEM (CANVAS) ---
   useEffect(() => {
-    // We only use Canvas for Rain currently. Fog is handled via CSS but we clear canvas if not raining.
-    if (!canvasRef.current) return;
+    if (!canvasRef.current || !weatherEnabled) return;
     
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
@@ -39,21 +51,59 @@ const TravelHud: React.FC<TravelHudProps> = ({ current, progress, weather = 'NON
     let w = canvas.width;
     let h = canvas.height;
 
-    // Particle Arrays
-    const rainParticles: {x: number, y: number, z: number, len: number}[] = [];
-    const splashes: {x: number, y: number, age: number, maxAge: number}[] = [];
+    type ParticleType = 'RAIN' | 'LENS_DROP' | 'SNOW';
+    interface Particle {
+      x: number;
+      y: number;
+      z: number; 
+      size: number;
+      speed: number;
+      opacity: number;
+      type: ParticleType;
+      driftOffset?: number;
+    }
 
-    const initRain = () => {
-        const count = 500; // Dense rain
-        rainParticles.length = 0;
-        for (let i = 0; i < count; i++) {
-            rainParticles.push({
-                x: Math.random() * w,
-                y: Math.random() * h,
-                z: Math.random() * 2 + 0.5, // Depth: 0.5 (far) to 2.5 (close)
-                len: Math.random() * 20 + 10
-            });
-        }
+    const particles: Particle[] = [];
+    
+    const spawnParticle = (randomY = false) => {
+      const currentIntensity = intensityRef.current;
+      const type: ParticleType = weather === 'RAIN' 
+        ? (Math.random() > 0.97 ? 'LENS_DROP' : 'RAIN') 
+        : 'SNOW';
+
+      const z = Math.random(); 
+      let p: Particle = {
+        x: Math.random() * w,
+        y: randomY ? Math.random() * h : -100,
+        z,
+        type,
+        size: 0,
+        speed: 0,
+        opacity: 0,
+        driftOffset: 0
+      };
+
+      if (type === 'RAIN') {
+        const speedVar = 0.8 + Math.random() * 0.4; 
+        p.speed = (20 + z * 15) * speedVar * (0.8 + currentIntensity * 0.4); 
+        const sizeVar = 0.8 + Math.random() * 0.5;
+        p.size = (25 + z * 35) * sizeVar; 
+        p.opacity = (0.3 + z * 0.5) * Math.min(1, currentIntensity + 0.2);
+        p.driftOffset = (Math.random() - 0.5) * 2; 
+      } else if (type === 'LENS_DROP') {
+        p.y = randomY ? Math.random() * h : Math.random() * h * 0.5;
+        p.speed = 0.5 + Math.random(); 
+        p.size = 2 + Math.random() * 4; 
+        p.opacity = (0.6 + Math.random() * 0.4) * currentIntensity;
+      } else if (type === 'SNOW') {
+        p.speed = 0.2 + z * 0.8;
+        p.size = 1 + z * 3;
+        p.opacity = (0.2 + z * 0.5) * currentIntensity;
+        p.driftOffset = Math.random() * Math.PI * 2;
+      }
+      
+      if (!randomY) particles.push(p);
+      else particles[particles.length] = p; 
     };
 
     const resize = () => {
@@ -61,198 +111,221 @@ const TravelHud: React.FC<TravelHudProps> = ({ current, progress, weather = 'NON
         canvas.height = window.innerHeight;
         w = canvas.width;
         h = canvas.height;
-        if (weather === 'RAIN') initRain();
+        particles.length = 0; // Clear on resize
+        if (weather !== 'NONE') {
+             for(let i=0; i<50; i++) spawnParticle(true);
+        }
     };
 
     window.addEventListener('resize', resize);
     resize();
 
-    // Trigger init if weather changes to rain
-    if (weather === 'RAIN') initRain();
-    else rainParticles.length = 0; // Clear if not raining
-
     const render = () => {
+        if (!weatherEnabled) {
+            ctx.clearRect(0,0,w,h);
+            return;
+        }
+
+        const currentIntensity = intensityRef.current;
         ctx.clearRect(0, 0, w, h);
         
-        if (weather === 'RAIN') {
-            // Rain Physics & Draw
-            ctx.lineCap = 'round';
+        let targetParticles = 0;
+        if (weather === 'RAIN') targetParticles = Math.floor(50 + currentIntensity * 350);
+        else if (weather === 'FOG') targetParticles = Math.floor(50 + currentIntensity * 200);
 
-            // Draw drops
-            rainParticles.forEach(p => {
-                const speed = p.z * 12; // Closer drops fall faster
-                const opacity = (p.z - 0.5) / 2.5; // Closer drops are clearer
-                const thickness = p.z * 0.8; 
-                
-                ctx.strokeStyle = `rgba(200, 230, 255, ${opacity * 0.6})`;
-                ctx.lineWidth = thickness;
-                
+        if (particles.length < targetParticles) {
+            const spawnRate = Math.ceil((targetParticles - particles.length) / 10);
+            for(let i=0; i<spawnRate; i++) spawnParticle(false);
+        } else if (particles.length > targetParticles) {
+            particles.splice(0, particles.length - targetParticles);
+        }
+
+        if (weather === 'RAIN' && Math.random() > (0.998 - (currentIntensity * 0.005))) {
+           const flashIntensity = 0.3 + Math.random() * 0.7 * currentIntensity;
+           setLightningFlash(flashIntensity);
+        }
+
+        for (let i = 0; i < particles.length; i++) {
+            const p = particles[i];
+
+            if (p.type === 'RAIN') {
+                const windX = (-3 * p.z) + (p.driftOffset || 0);
+                const grad = ctx.createLinearGradient(p.x, p.y, p.x + windX, p.y + p.size);
+                grad.addColorStop(0, `rgba(200, 240, 255, 0)`);
+                grad.addColorStop(1, `rgba(220, 245, 255, ${p.opacity})`);
+                ctx.strokeStyle = grad;
+                ctx.lineWidth = 1 + p.z * 1.5;
+                ctx.lineCap = 'round';
                 ctx.beginPath();
                 ctx.moveTo(p.x, p.y);
-                // Slant for wind effect (closer drops slant more visually)
-                const windOffset = speed * -0.3;
-                ctx.lineTo(p.x + windOffset, p.y + p.len * p.z); 
+                ctx.lineTo(p.x + windX, p.y + p.size);
                 ctx.stroke();
 
-                // Update Position
-                p.y += speed;
-                p.x += windOffset;
-
-                // Reset
-                if (p.y > h) {
-                    // Spawn Splash? (Only for closer/heavier drops)
-                    if (p.z > 1.5 && Math.random() > 0.7) {
-                        splashes.push({
-                            x: p.x,
-                            y: h,
-                            age: 0,
-                            maxAge: 10 + Math.random() * 10
-                        });
-                    }
-
-                    p.y = -p.len * p.z;
-                    p.x = Math.random() * (w + 200); // Spawn wider to cover wind slant
-                }
-            });
-
-            // Draw Splashes
-            for (let i = splashes.length - 1; i >= 0; i--) {
-                const s = splashes[i];
-                s.age++;
-                if (s.age > s.maxAge) {
-                    splashes.splice(i, 1);
-                    continue;
-                }
-
-                const progress = s.age / s.maxAge;
-                const radius = progress * 15;
-                const alpha = 1 - progress;
-
-                ctx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
-                ctx.lineWidth = 1;
-                
+                p.y += p.speed;
+                p.x += windX;
+            } else if (p.type === 'LENS_DROP') {
+                ctx.fillStyle = `rgba(255, 255, 255, ${p.opacity})`;
                 ctx.beginPath();
-                // Ellipse ripple
-                ctx.ellipse(s.x, s.y, radius, radius * 0.3, 0, 0, Math.PI * 2);
-                ctx.stroke();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.fill();
+                p.y += p.speed;
+                p.opacity -= 0.005;
+            } else if (p.type === 'SNOW') {
+                const drift = Math.sin((Date.now() * 0.001) + (p.driftOffset || 0)) * 0.5;
+                ctx.fillStyle = `rgba(220, 255, 255, ${p.opacity})`;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.fill();
+                p.y += p.speed;
+                p.x += drift;
+            }
+
+            if (p.y > h + 50 || p.x < -50 || p.opacity <= 0) {
+               const z = Math.random();
+               if (p.type === 'RAIN') {
+                  p.x = Math.random() * (w + 100);
+                  p.y = -100 - Math.random() * 50;
+                  p.z = z;
+                  p.speed = (20 + z * 15) * (0.8 + Math.random() * 0.4) * (0.8 + currentIntensity * 0.4);
+                  p.size = (25 + z * 35) * (0.8 + Math.random() * 0.5);
+                  p.opacity = (0.3 + z * 0.5) * Math.min(1, currentIntensity + 0.2);
+               } else if (p.type === 'LENS_DROP') {
+                   p.type = 'RAIN'; 
+                   p.y = -50;
+               } else if (p.type === 'SNOW') {
+                   p.y = -10;
+                   p.x = Math.random() * w;
+                   p.opacity = (0.2 + z * 0.5) * currentIntensity;
+               }
             }
         }
-        
         animationFrameId = requestAnimationFrame(render);
     };
 
     render();
-
     return () => {
         window.removeEventListener('resize', resize);
         cancelAnimationFrame(animationFrameId);
     };
-  }, [weather]);
+  }, [weather, weatherEnabled]); // Depend on enabled state
+
+  // Lightning Decay
+  useEffect(() => {
+    if (lightningFlash > 0) {
+        const timer = setTimeout(() => setLightningFlash(0), 120);
+        return () => clearTimeout(timer);
+    }
+  }, [lightningFlash]);
+
+  // Determine sway animation string
+  const swayAnimation = (!reduceMotion && weather !== 'NONE') 
+    ? `uiSway ${5 - intensity * 2}s infinite ease-in-out` 
+    : 'none';
+  
+  const reverseSwayAnimation = (!reduceMotion && weather !== 'NONE')
+    ? `uiSway ${6 - intensity * 2}s infinite ease-in-out reverse`
+    : 'none';
 
   return (
     <div className="absolute inset-0 pointer-events-none flex flex-col justify-between p-6 z-10 overflow-hidden">
       
-      {/* --- ANIMATIONS & STYLES --- */}
+      {/* Lightning Overlay */}
+      {weatherEnabled && (
+          <div 
+            className="absolute inset-0 bg-white pointer-events-none z-20 transition-opacity duration-150 mix-blend-overlay"
+            style={{ opacity: lightningFlash }}
+          />
+      )}
+
+      {/* --- STYLES --- */}
       <style>{`
         @keyframes drift {
            0% { transform: translateX(-10vw) translateY(0) rotate(0deg); opacity: 0; }
-           30% { transform: translateX(30vw) translateY(20px) rotate(60deg); opacity: 0.5; }
-           60% { transform: translateX(70vw) translateY(-20px) rotate(120deg); opacity: 0.5; }
            100% { transform: translateX(110vw) translateY(0) rotate(180deg); opacity: 0; }
         }
-        @keyframes pulseGlow {
-          0%, 100% { box-shadow: 0 0 2px rgba(100, 255, 255, 0.3); background-color: rgba(100, 255, 255, 0.4); }
-          50% { box-shadow: 0 0 8px rgba(100, 255, 255, 0.8); background-color: rgba(150, 255, 255, 0.9); }
-        }
         @keyframes swimIn {
-          0% { transform: translateX(200px) rotate(10deg) scale(0.5); opacity: 0; }
-          60% { transform: translateX(-20px) rotate(-5deg) scale(1.1); opacity: 1; }
-          80% { transform: translateX(10px) rotate(2deg) scale(0.95); }
+          0% { transform: translateX(120%) rotate(15deg) scale(0.6); opacity: 0; }
           100% { transform: translateX(0) rotate(0) scale(1); }
         }
-        @keyframes wiggle {
-          0%, 100% { transform: rotate(-5deg); }
-          50% { transform: rotate(5deg); }
+        @keyframes playfulWiggle {
+          0%, 100% { transform: rotate(-8deg) translateY(0px) scale(1); }
+          50% { transform: rotate(8deg) translateY(-8px) scale(1.05); }
         }
         @keyframes fogFlow1 {
-          0% { transform: translateX(-25%); }
-          100% { transform: translateX(25%); }
+          0% { transform: translateX(-15%) translateY(-5%); }
+          100% { transform: translateX(15%) translateY(5%); }
         }
-        @keyframes fogFlow2 {
-          0% { transform: translateX(25%); }
-          100% { transform: translateX(-25%); }
+        @keyframes fogPulse {
+          0%, 100% { opacity: 0.3; }
+          50% { opacity: 0.5; }
+        }
+        @keyframes uiSway {
+          0%, 100% { transform: translate(0, 0) rotate(0deg); }
+          25% { transform: translate(2px, 1px) rotate(0.2deg); }
+          50% { transform: translate(-1px, 2px) rotate(-0.2deg); }
+          75% { transform: translate(-2px, -1px) rotate(0.1deg); }
         }
       `}</style>
       
-      {/* --- WEATHER EFFECTS --- */}
-      
-      {/* FOG: Multi-layer Volumetric CSS */}
-      <div className={`absolute inset-0 transition-opacity duration-1000 ${weather === 'FOG' ? 'opacity-100' : 'opacity-0'}`}>
-         {/* Background Blur for Depth of Field Loss */}
-         <div className="absolute inset-0 backdrop-blur-[3px] transition-all duration-1000"></div>
-         
-         {/* Base Dim Layer */}
-         <div className="absolute inset-0 bg-slate-500/20 mix-blend-multiply"></div>
-         
-         {/* Fog Layer 1: Slow rolling thick clouds */}
-         <div className="absolute inset-[-50%] opacity-60 mix-blend-screen" 
-              style={{ 
-                  background: 'radial-gradient(circle, rgba(255,255,255,0.8) 0%, transparent 60%)',
-                  backgroundSize: '50% 50%',
-                  animation: 'fogFlow1 60s infinite alternate linear'
-              }}></div>
-         
-         {/* Fog Layer 2: Faster mist */}
-         <div className="absolute inset-[-50%] opacity-40 mix-blend-overlay" 
-              style={{ 
-                  background: 'repeating-radial-gradient(circle at 50% 50%, rgba(200,220,230,0.5), transparent 20%)',
-                  backgroundSize: '30% 30%',
-                  animation: 'fogFlow2 45s infinite alternate ease-in-out'
-              }}></div>
-
-         {/* Fog Layer 3: Noise Texture for gritty detail (Simulated via small repeating gradient) */}
-         <div className="absolute inset-0 opacity-20"
-              style={{
-                  backgroundImage: 'url("data:image/svg+xml,%3Csvg viewBox=\'0 0 200 200\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noiseFilter\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.65\' numOctaves=\'3\' stitchTiles=\'stitch\'/%3E%3C/filter%3E%3Crect width=\'100%25\' height=\'100%25\' filter=\'url(%23noiseFilter)\' opacity=\'0.5\'/%3E%3C/svg%3E")',
-              }}>
-         </div>
-
-         {/* Fog UI Indicator */}
-         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <div className="text-slate-100/80 font-bold text-5xl flex flex-col items-center gap-2 drop-shadow-[0_2px_10px_rgba(0,0,0,0.3)] animate-pulse">
-                <CloudFog size={80} strokeWidth={1.5} />
-                <span className="tracking-widest font-mono text-2xl">VISIBILITY LOW</span>
+      {/* WEATHER: FOG */}
+      {weatherEnabled && (
+        <div 
+            className={`absolute inset-0 transition-all duration-1000`}
+            style={{ 
+                opacity: weather === 'FOG' ? Math.max(0.2, intensity) : 0,
+                backdropFilter: `blur(${weather === 'FOG' ? intensity * 3 : 0}px)`
+            }}
+        >
+            <div className="absolute inset-0 bg-teal-900/40 mix-blend-multiply"></div>
+            {/* Reduced complexity fog for performance if needed, keeping simple layers */}
+            <div className="absolute inset-[-50%] opacity-40 mix-blend-screen" 
+                style={{ 
+                    backgroundImage: `radial-gradient(circle at 20% 50%, rgba(56, 189, 248, 0.15) 0%, transparent 50%)`,
+                    backgroundSize: '80% 80%',
+                    animation: !reduceMotion ? 'fogFlow1 60s infinite alternate ease-in-out' : 'none'
+                }}></div>
+            
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div className="text-teal-100/60 font-bold text-5xl flex flex-col items-center gap-2 drop-shadow-[0_2px_10px_rgba(0,0,0,0.3)]" style={{ animation: !reduceMotion ? 'fogPulse 4s infinite ease-in-out' : 'none' }}>
+                    <CloudFog size={80} strokeWidth={1.5} />
+                    <span className="tracking-widest font-mono text-2xl">TURBULENCE</span>
+                </div>
             </div>
         </div>
-      </div>
+      )}
 
-      {/* RAIN: Canvas Particle System */}
+      {/* WEATHER: PARTICLES CANVAS */}
       <canvas 
         ref={canvasRef}
-        className={`absolute inset-0 z-0 transition-opacity duration-500 ${weather === 'RAIN' ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+        className={`absolute inset-0 z-0 transition-opacity duration-500`}
+        style={{ opacity: weatherEnabled ? 1 : 0 }}
       />
-      {weather === 'RAIN' && (
+      
+      {weatherEnabled && weather === 'RAIN' && (
          <div className="absolute top-1/4 left-0 right-0 flex justify-center pointer-events-none">
-            <div className="bg-slate-900/40 backdrop-blur px-6 py-2 rounded-full text-cyan-50/90 font-bold text-xl flex items-center gap-3 border border-cyan-500/30 animate-bounce">
+            <div className={`bg-slate-900/60 backdrop-blur px-6 py-2 rounded-full text-cyan-50/90 font-bold text-xl flex items-center gap-3 border border-cyan-500/30 ${!reduceMotion && 'animate-bounce'}`}>
                 <CloudRain size={24} />
-                <span>HEAVY RAIN DETECTED</span>
+                <span>SURFACE STORM DETECTED</span>
+                {lightningFlash > 0 && <Zap size={24} className="text-yellow-300" />}
             </div>
          </div>
       )}
 
-      {/* Decorative Overlay: Vignette for Underwater Feel */}
-      <div className="absolute inset-0 shadow-[inset_0_0_150px_rgba(0,30,60,0.6)] z-0 pointer-events-none"></div>
+      {/* Vignette */}
+      <div className="absolute inset-0 shadow-[inset_0_0_150px_rgba(0,20,40,0.7)] z-0 pointer-events-none"></div>
 
-      {/* --- DYNAMIC PARTICLES (Bubbles only) --- */}
+      {/* Bubbles */}
       <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
-        {/* Rising Bubbles Component */}
         <BubblesOverlay />
       </div>
 
       {/* Header Info */}
-      <div className="bg-black/50 backdrop-blur-md p-4 rounded-xl text-white border border-cyan-400/30 max-w-md z-10 relative">
+      <div 
+        className="bg-black/50 backdrop-blur-md p-4 rounded-xl text-white border border-cyan-400/30 max-w-md z-10 relative transition-transform duration-1000"
+        style={{ animation: swayAnimation }}
+      >
         <h2 className="text-2xl font-bold text-cyan-300 flex items-center gap-2">
-          <Waves className="animate-pulse" /> {current.name}
+          <Waves className={!reduceMotion ? "animate-pulse" : ""} /> {current.name}
         </h2>
         <p className="text-sm opacity-80 mt-1">Traveling to {current.endLocation}...</p>
       </div>
@@ -262,15 +335,15 @@ const TravelHud: React.FC<TravelHudProps> = ({ current, progress, weather = 'NON
         <div 
           key={activeAnimal.name} 
           className="absolute top-1/2 right-4 md:right-10 -translate-y-1/2 z-20"
-          style={{ animation: 'swimIn 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards' }}
+          style={{ animation: !reduceMotion ? 'swimIn 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) forwards' : 'none' }}
         >
           <div className="bg-white/95 p-6 rounded-3xl shadow-[0_10px_40px_rgba(0,0,0,0.3)] text-center border-4 border-cyan-300 transform transition-all relative overflow-hidden">
             <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-b from-cyan-50 to-transparent opacity-50 z-0"></div>
             
             <div className="relative z-10">
                 <div 
-                  className="text-8xl mb-2 filter drop-shadow-md" 
-                  style={{ animation: 'wiggle 3s ease-in-out infinite' }}
+                  className="text-8xl mb-2 filter drop-shadow-md cursor-pointer" 
+                  style={{ animation: !reduceMotion ? 'playfulWiggle 3s ease-in-out infinite' : 'none' }}
                 >
                   {activeAnimal.emoji}
                 </div>
@@ -281,18 +354,15 @@ const TravelHud: React.FC<TravelHudProps> = ({ current, progress, weather = 'NON
                   Depth: {activeAnimal.depth}
                 </div>
             </div>
-            
-            {/* Sparkles/Bubbles decorative */}
-            <div className="absolute top-2 right-4 text-xl animate-pulse">✨</div>
-            <div className="absolute bottom-4 left-4 text-xl animate-bounce delay-100">🫧</div>
           </div>
         </div>
       )}
 
       {/* Bottom Dashboard */}
-      <div className="grid grid-cols-4 gap-4 bg-black/60 backdrop-blur-lg p-4 rounded-2xl border border-white/10 text-white z-10 relative">
-        
-        {/* Progress Bar */}
+      <div 
+        className="grid grid-cols-4 gap-4 bg-black/60 backdrop-blur-lg p-4 rounded-2xl border border-white/10 text-white z-10 relative transition-transform duration-1000"
+        style={{ animation: reverseSwayAnimation }}
+      >
         <div className="col-span-4 mb-2">
            <div className="flex justify-between text-xs mb-1 uppercase tracking-wider font-semibold text-cyan-300">
              <span>Start</span>
@@ -304,13 +374,12 @@ const TravelHud: React.FC<TravelHudProps> = ({ current, progress, weather = 'NON
                className="h-full bg-gradient-to-r from-cyan-400 via-blue-500 to-indigo-600 transition-all duration-300 ease-linear relative"
                style={{ width: `${progress}%` }}
              >
-                {/* Shine effect on bar */}
-                <div className="absolute top-0 right-0 bottom-0 w-full bg-gradient-to-r from-transparent via-white/30 to-transparent animate-pulse" />
+                {/* Shine effect */}
+                {!reduceMotion && <div className="absolute top-0 right-0 bottom-0 w-full bg-gradient-to-r from-transparent via-white/30 to-transparent animate-pulse" />}
              </div>
            </div>
         </div>
 
-        {/* Stats */}
         <div className="flex flex-col items-center p-2 bg-white/5 rounded-lg border border-white/5">
            <Timer className="text-yellow-400 mb-1" size={20} />
            <span className="text-[10px] text-gray-400 uppercase tracking-widest">Speed</span>

@@ -14,6 +14,14 @@ export interface MarineLife {
   depth: string;
 }
 
+export interface QuizQuestion {
+  id: string;
+  question: string;
+  options: string[];
+  correctAnswer: number; // index of the correct option
+  fact: string; // explanation shown after answering
+}
+
 export interface OceanCurrent {
   id: string;
   name: string;
@@ -25,6 +33,7 @@ export interface OceanCurrent {
   avgTemp: string; // e.g., "24°C"
   avgSpeed: string; // e.g., "2 m/s"
   biodiversity: MarineLife[];
+  quizzes: QuizQuestion[];
 }
 
 export interface Letter {

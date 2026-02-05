@@ -11,6 +11,7 @@ interface Globe3DProps {
   width?: number;
   height?: number;
   travelProgress?: number;
+  reduceMotion?: boolean;
 }
 
 const hexToRgba = (hex: string, alpha: number) => {
@@ -26,11 +27,13 @@ const Globe3D: React.FC<Globe3DProps> = ({
   interactive,
   width,
   height,
-  travelProgress = 0
+  travelProgress = 0,
+  reduceMotion = false
 }) => {
   const globeEl = useRef<GlobeMethods | undefined>(undefined);
   const [hoveredPath, setHoveredPath] = useState<string | null>(null);
   const [isGlobeReady, setIsGlobeReady] = useState(false);
+  const [rippleData, setRippleData] = useState<any[]>([]);
 
   // Helper: Interpolate position along path
   const getBubblePosition = (currentId: string, progress: number) => {
@@ -86,24 +89,42 @@ const Globe3D: React.FC<Globe3DProps> = ({
         globeEl.current?.pointOfView({ lat: bubblePos.lat, lng: bubblePos.lng, altitude: 0.4 }, 100);
       } catch (e) {}
     } else if (selectedCurrentId && globeEl.current && interactive) {
-      // Selection Focus (Static)
+      // Selection Focus (Static) with Offset
       const current = OCEAN_CURRENTS.find(c => c.id === selectedCurrentId);
       if (current) {
-        const start = current.path[0];
-        const end = current.path[current.path.length - 1];
+        // Calculate bounding box to find center
+        let minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
+        current.path.forEach(p => {
+           if (p.lat < minLat) minLat = p.lat;
+           if (p.lat > maxLat) maxLat = p.lat;
+           if (p.lng < minLng) minLng = p.lng;
+           if (p.lng > maxLng) maxLng = p.lng;
+        });
+
+        const centerLat = (minLat + maxLat) / 2;
+        const centerLng = (minLng + maxLng) / 2;
+        
+        // Offset latitude to shift current upwards in the viewport (to clear bottom modal)
+        // Subtracting from latitude moves camera south, which shifts the object UP on the screen.
+        const latOffset = -20; 
+
         try {
-          globeEl.current.pointOfView({ lat: (start.lat + end.lat)/2, lng: (start.lng + end.lng)/2, altitude: 1.8 }, 1000);
+          globeEl.current.pointOfView({ 
+            lat: centerLat + latOffset, 
+            lng: centerLng, 
+            altitude: 2.1 // Slightly zoomed out to see full context
+          }, 1000);
         } catch (e) {}
       }
-    } else if (globeEl.current && interactive) {
-       // Reset view for selection mode
+    } else if (globeEl.current && interactive && !selectedCurrentId) {
+       // Reset view for selection mode (Map Reset)
        try {
-         // Don't force reset every render, only when switching to interactive
+         globeEl.current.pointOfView({ lat: 20, lng: -40, altitude: 2.5 }, 1500);
        } catch (e) {}
     }
   }, [selectedCurrentId, interactive, bubblePos]);
 
-  // Configure controls (Auto-rotate & Smooth Zoom)
+  // Configure controls (Auto-rotate & Smooth Zoom) & Atmosphere/Lighting Tweaks
   useEffect(() => {
     if (!globeEl.current || !isGlobeReady) return;
     try {
@@ -114,16 +135,49 @@ const Globe3D: React.FC<Globe3DProps> = ({
         controls.enableZoom = true;
         controls.zoomSpeed = 0.5;
 
+        // Auto-rotate logic respecting reduceMotion
         // Auto-rotate when not interactive (Intro/Write Letter) and not traveling (Follow Bubble)
-        if (!interactive && !bubblePos) {
+        if (!reduceMotion && !interactive && !bubblePos) {
            controls.autoRotate = true;
            controls.autoRotateSpeed = 0.6; // Slow and gentle
         } else {
            controls.autoRotate = false;
         }
       }
+
+      // --- Custom Atmosphere & Lighting for Underwater Feel ---
+      const globeObj = globeEl.current;
+      const scene = globeObj.scene();
+      
+      // 1. Adjust Material (Make it shinier/glossy like water)
+      const globeMaterial = globeObj.globeMaterial();
+      if (globeMaterial) {
+          globeMaterial.shininess = 20;
+          globeMaterial.specular = new THREE.Color(0x11aabb); // Cyan specular highlight
+      }
+
+      // 2. Add Custom Lighting (Deep Ocean Blue Ambient + Directional Key)
+      // Check if we already added lights to avoid dupes (simple check by type/name)
+      if (!scene.getObjectByName('oceanAmbient')) {
+          const ambientLight = new THREE.AmbientLight(0x0c4a6e, 0.8); // Deep blue
+          ambientLight.name = 'oceanAmbient';
+          scene.add(ambientLight);
+
+          // Add a cool-toned directional light (Moonlight/Sunlight through water)
+          const dirLight = new THREE.DirectionalLight(0xe0f2fe, 1.2); // Pale blue
+          dirLight.position.set(15, 10, 5);
+          dirLight.name = 'oceanSun';
+          scene.add(dirLight);
+
+          // Rim light for dramatic effect
+          const rimLight = new THREE.PointLight(0x06b6d4, 1.5, 0); // Cyan
+          rimLight.position.set(-20, 10, -20);
+          rimLight.name = 'oceanRim';
+          scene.add(rimLight);
+      }
+
     } catch (e) {}
-  }, [interactive, bubblePos, isGlobeReady]);
+  }, [interactive, bubblePos, isGlobeReady, reduceMotion]); // Depend on reduceMotion
 
 
   // Prepare data for rendering paths with multi-layer approach for flow visualization
@@ -162,7 +216,7 @@ const Globe3D: React.FC<Globe3DProps> = ({
         alt: isSelected || isHovered ? 0.065 : 0.015,
         dashLength: 0.4, // Long segments
         dashGap: 0.2, // Small gaps
-        animateTime: 3000 // Slow pulse
+        animateTime: reduceMotion ? 0 : 3000 // Stop animation if reduced motion
       });
 
       // 3. FLOW PARTICLES (Fast white dashes - Bubbles/Movement)
@@ -171,12 +225,12 @@ const Globe3D: React.FC<Globe3DProps> = ({
         type: 'flow-particles',
         id: c.id,
         coords: c.path.map(p => [p.lat, p.lng]),
-        color: 'rgba(255, 255, 255, 0.9)',
-        stroke: isHovered ? 3.0 : 1.0, // Scale up on hover
+        color: 'rgba(255, 255, 255, 0.95)',
+        stroke: isHovered ? 3.5 : 1.5, // Slightly thicker for visibility
         alt: isSelected || isHovered ? 0.07 : 0.025, // Top layer
-        dashLength: 0.02, // Short dots
-        dashGap: 0.05,
-        animateTime: 1500 // Moderate speed
+        dashLength: 0.005, // Much smaller dashes
+        dashGap: 0.015, // Frequent spacing
+        animateTime: reduceMotion ? 0 : 1200 // Stop animation if reduced motion
       });
 
       // 4. HITBOX PATH (Ghost - for easier clicking)
@@ -197,7 +251,7 @@ const Globe3D: React.FC<Globe3DProps> = ({
     });
 
     return generatedPaths;
-  }, [selectedCurrentId, hoveredPath, interactive]);
+  }, [selectedCurrentId, hoveredPath, interactive, reduceMotion]);
 
   // Destination Labels (only end points)
   const labelsData = useMemo(() => {
@@ -226,14 +280,16 @@ const Globe3D: React.FC<Globe3DProps> = ({
 
       // Particles (Plankton/Small bubbles)
       // Reduce spread for tighter trail
-      for(let i=0; i<10; i++) {
-        objects.push({
-          type: 'particle',
-          lat: bubblePos.lat + (Math.random() - 0.5) * 0.5, 
-          lng: bubblePos.lng + (Math.random() - 0.5) * 0.5,
-          alt: bubblePos.alt + (Math.random() - 0.5) * 0.02,
-          size: Math.random()
-        });
+      if (!reduceMotion) {
+        for(let i=0; i<10; i++) {
+          objects.push({
+            type: 'particle',
+            lat: bubblePos.lat + (Math.random() - 0.5) * 0.5, 
+            lng: bubblePos.lng + (Math.random() - 0.5) * 0.5,
+            alt: bubblePos.alt + (Math.random() - 0.5) * 0.02,
+            size: Math.random()
+          });
+        }
       }
     }
 
@@ -257,10 +313,11 @@ const Globe3D: React.FC<Globe3DProps> = ({
 
     return objects;
 
-  }, [bubblePos, interactive]);
+  }, [bubblePos, interactive, reduceMotion]);
 
   return (
     <div className={`cursor-${interactive ? 'grab' : 'default'}`}>
+      {/* @ts-ignore */}
       <Globe
         ref={globeEl}
         onGlobeReady={() => setIsGlobeReady(true)}
@@ -269,6 +326,10 @@ const Globe3D: React.FC<Globe3DProps> = ({
         globeImageUrl="//unpkg.com/three-globe/example/img/earth-blue-marble.jpg"
         bumpImageUrl="//unpkg.com/three-globe/example/img/earth-topology.png"
         backgroundImageUrl="//unpkg.com/three-globe/example/img/night-sky.png"
+        
+        // Atmosphere & Lighting
+        atmosphereColor="#38bdf8" // Electric blue/cyan atmosphere
+        atmosphereAltitude={0.25} // Increased altitude for glow effect
         
         // Paths configuration
         pathsData={pathsData}
@@ -299,11 +360,31 @@ const Globe3D: React.FC<Globe3DProps> = ({
           }
         }}
         onPathClick={(path: any) => {
-          if (interactive && onCurrentSelect && path) {
-             const current = OCEAN_CURRENTS.find(c => c.id === path.id);
-             if (current) onCurrentSelect(current);
+          if (interactive && path) {
+             // 1. Trigger Ripple Feedback
+             if (path.coords && path.coords.length > 0) {
+                 const startPoint = path.coords[0];
+                 setRippleData([{ lat: startPoint[0], lng: startPoint[1] }]);
+                 // Clear ripple shortly after
+                 setTimeout(() => setRippleData([]), 1500);
+             }
+
+             // 2. Select Current with delay
+             setTimeout(() => {
+                if (onCurrentSelect) {
+                    const current = OCEAN_CURRENTS.find(c => c.id === path.id);
+                    if (current) onCurrentSelect(current);
+                }
+             }, 500);
           }
         }}
+
+        // Rings (Click Feedback)
+        ringsData={rippleData}
+        ringColor={() => '#67e8f9'}
+        ringMaxRadius={6}
+        ringPropagationSpeed={5}
+        ringRepeatPeriod={500}
 
         // Labels
         labelsData={labelsData}
@@ -326,7 +407,7 @@ const Globe3D: React.FC<Globe3DProps> = ({
             el.innerHTML = '🫧';
             el.style.fontSize = '40px';
             el.style.textShadow = '0 0 10px cyan';
-            el.style.animation = 'float 2s infinite ease-in-out';
+            el.style.animation = !reduceMotion ? 'float 2s infinite ease-in-out' : 'none';
             el.style.transform = 'translate(-50%, -50%)';
           } else if (d.type === 'particle') {
             // Particle
@@ -351,29 +432,35 @@ const Globe3D: React.FC<Globe3DProps> = ({
              const pulseColor = hexToRgba(d.color, 0.6);
              const transparentColor = hexToRgba(d.color, 0);
              
-             el.animate([
-               { boxShadow: `0 0 0 0px ${pulseColor}` },
-               { boxShadow: `0 0 0 15px ${transparentColor}` }
-             ], {
-               duration: 1500,
-               iterations: Infinity
-             });
+             if (!reduceMotion) {
+                el.animate([
+                    { boxShadow: `0 0 0 0px ${pulseColor}` },
+                    { boxShadow: `0 0 0 15px ${transparentColor}` }
+                ], {
+                    duration: 1500,
+                    iterations: Infinity
+                });
+             }
 
              // Click handler
              el.onclick = (e) => {
                 e.stopPropagation();
-                if (onCurrentSelect) {
-                   const current = OCEAN_CURRENTS.find(c => c.id === d.id);
-                   if (current) onCurrentSelect(current);
-                }
+                // Trigger ripple here too
+                setRippleData([{ lat: d.lat, lng: d.lng }]);
+                setTimeout(() => setRippleData([]), 1500);
+
+                // Add delay before showing card to let ripple effect be seen
+                setTimeout(() => {
+                    if (onCurrentSelect) {
+                       const current = OCEAN_CURRENTS.find(c => c.id === d.id);
+                       if (current) onCurrentSelect(current);
+                    }
+                }, 500);
              };
           }
           
           return el;
         }}
-
-        atmosphereColor="lightskyblue"
-        atmosphereAltitude={0.15}
       />
     </div>
   );

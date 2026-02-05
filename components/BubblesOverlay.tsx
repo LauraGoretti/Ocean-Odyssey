@@ -1,66 +1,116 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
+
+interface BubbleConfig {
+  id: number;
+  left: number;
+  size: number;
+  riseDuration: number;
+  riseDelay: number;
+  wobbleDuration: number;
+  wobbleAmp: number;
+  wobbleDelay: number;
+  opacity: number;
+}
+
+const Bubble: React.FC<{ config: BubbleConfig }> = ({ config }) => {
+  const [isPopped, setIsPopped] = useState(false);
+
+  const handleClick = (e: React.MouseEvent) => {
+    // Prevent click from propagating if we had globe interaction logic, 
+    // though here the container is pointer-events-none so it doesn't matter much.
+    // The bubble itself is pointer-events-auto.
+    e.stopPropagation(); 
+    
+    setIsPopped(true);
+    // Reset the pop effect after animation
+    setTimeout(() => setIsPopped(false), 500);
+  };
+
+  return (
+    <div
+      className="absolute bottom-0 will-change-transform pointer-events-auto cursor-pointer"
+      style={{
+        left: `${config.left}%`,
+        width: `${config.size}px`,
+        height: `${config.size}px`,
+        // @ts-ignore
+        '--bubble-opacity': config.opacity,
+        animation: `bubble-rise ${config.riseDuration}s linear infinite`,
+        animationDelay: `${config.riseDelay}s`,
+      } as React.CSSProperties}
+      onClick={handleClick}
+    >
+      {/* Wobble Layer - Separated to avoid transform conflicts with scale */}
+      <div 
+        className="w-full h-full"
+        style={{
+          // @ts-ignore
+          '--wobble-amp': config.wobbleAmp,
+          animation: `bubble-wobble ${config.wobbleDuration}s ease-in-out infinite`,
+          animationDelay: `${config.wobbleDelay}s`
+        } as React.CSSProperties}
+      >
+        {/* Visual & Interaction Layer */}
+        <div 
+          className={`w-full h-full rounded-full border transition-all duration-300 ease-out
+            bg-cyan-50/10 backdrop-blur-[1px]
+            ${isPopped 
+               ? 'border-white bg-white/40 shadow-[0_0_30px_rgba(255,255,255,0.9)] scale-150 opacity-0' 
+               : 'border-cyan-100/40 hover:border-cyan-200 hover:bg-cyan-50/30 hover:shadow-[0_0_15px_rgba(6,182,212,0.8)] hover:scale-110'
+            }
+          `}
+        >
+          {/* Highlight */}
+          <div className="absolute top-[20%] right-[20%] w-[25%] h-[25%] bg-white/60 rounded-full blur-[1px]" />
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const BubblesOverlay: React.FC = () => {
-  // Generate static bubble configuration
-  const bubbles = useMemo(() => {
-    return Array.from({ length: 40 }).map((_, i) => ({
-      id: i,
-      // Concentrated in the center 40% of the screen (30% to 70%) to follow the "path"
-      left: 30 + Math.random() * 40, 
-      size: Math.random() * 20 + 5, // Size between 5px and 25px
-      riseDuration: Math.random() * 15 + 10, // Rise time between 10s and 25s
-      riseDelay: Math.random() * -25, // Start at different times in the cycle
-      wobbleDuration: Math.random() * 2 + 2, // Wobble speed 2-4s
-      wobbleDelay: Math.random() * 2,
-    }));
+  // Generate bubble configuration with more variance
+  const bubbles = useMemo<BubbleConfig[]>(() => {
+    return Array.from({ length: 50 }).map((_, i) => {
+      // Physics-inspired: Larger bubbles rise faster
+      const size = 6 + Math.random() * 24; // 6px to 30px
+      const baseSpeed = 15; 
+      const speedVariation = Math.random() * 5;
+      // Inverse relationship: Larger size -> Lower duration (Faster)
+      const riseDuration = (baseSpeed - (size / 5)) + speedVariation; 
+
+      return {
+        id: i,
+        // Wider spread but still avoiding extreme edges
+        left: 5 + Math.random() * 90, 
+        size,
+        riseDuration, // Calculated based on size
+        riseDelay: Math.random() * -30, // Start at different times
+        wobbleDuration: 2.5 + Math.random() * 3, // 2.5s to 5.5s
+        wobbleAmp: 10 + Math.random() * 25, // Varying drift width (10px to 35px)
+        wobbleDelay: Math.random() * 5,
+        opacity: 0.2 + Math.random() * 0.5, // Random opacity
+      };
+    });
   }, []);
 
   return (
     <div className="absolute inset-0 overflow-hidden pointer-events-none z-0">
       <style>{`
         @keyframes bubble-rise {
-            0% { transform: translateY(110vh); opacity: 0; }
-            10% { opacity: 0.4; }
-            50% { opacity: 0.6; }
-            90% { opacity: 0.4; }
-            100% { transform: translateY(-10vh); opacity: 0; }
+            0% { transform: translateY(110vh) scale(0.8); opacity: 0; }
+            10% { opacity: var(--bubble-opacity); }
+            80% { opacity: var(--bubble-opacity); }
+            100% { transform: translateY(-10vh) scale(1.2); opacity: 0; }
         }
         @keyframes bubble-wobble {
-            0%, 100% { transform: translateX(-8px); }
-            50% { transform: translateX(8px); }
+            0%, 100% { transform: translateX(calc(var(--wobble-amp) * -0.5px)) rotate(-5deg); }
+            50% { transform: translateX(calc(var(--wobble-amp) * 0.5px)) rotate(5deg); }
         }
       `}</style>
       
       {bubbles.map((bubble) => (
-        <div
-          key={bubble.id}
-          className="absolute bottom-0 will-change-transform"
-          style={{
-            left: `${bubble.left}%`,
-            width: `${bubble.size}px`,
-            height: `${bubble.size}px`,
-            animation: `bubble-rise ${bubble.riseDuration}s linear infinite`,
-            animationDelay: `${bubble.riseDelay}s`,
-          }}
-        >
-             {/* Inner container handles the side-to-side wobble independently of the vertical rise */}
-             <div 
-                className="w-full h-full rounded-full border border-cyan-100/40 bg-cyan-50/10 shadow-[inset_0_0_6px_rgba(255,255,255,0.4)] backdrop-blur-[1px]" 
-                style={{
-                    animation: `bubble-wobble ${bubble.wobbleDuration}s ease-in-out infinite`,
-                    animationDelay: `${bubble.wobbleDelay}s`
-                }}
-             />
-             
-             {/* Highlight on bubble */}
-             <div 
-                className="absolute top-[20%] right-[20%] w-[25%] h-[25%] bg-white/60 rounded-full blur-[1px]"
-                style={{
-                    animation: `bubble-wobble ${bubble.wobbleDuration}s ease-in-out infinite`,
-                    animationDelay: `${bubble.wobbleDelay}s`
-                }}
-             />
-        </div>
+        <Bubble key={bubble.id} config={bubble} />
       ))}
     </div>
   );

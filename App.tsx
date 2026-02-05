@@ -2,10 +2,46 @@ import React, { useState, useEffect, useRef } from 'react';
 import Globe3D from './components/Globe3D';
 import TravelHud from './components/TravelHud';
 import CurrentDetailsCard from './components/CurrentDetailsCard';
-import { GamePhase, OceanCurrent, Letter, DestinationResponse, WeatherEffect } from './types';
+import QuizModal from './components/QuizModal';
+import SettingsModal, { GameSettings } from './components/SettingsModal';
+import { GamePhase, OceanCurrent, Letter, DestinationResponse, WeatherEffect, QuizQuestion } from './types';
 import { OCEAN_CURRENTS } from './data/oceanData';
 import { generateDestinationResponse } from './services/geminiService';
-import { Send, Map, Volume2, ArrowRight, Home, RefreshCw, Anchor } from 'lucide-react';
+import { Send, Map, Volume2, VolumeX, ArrowRight, Home, RefreshCw, Anchor, Settings } from 'lucide-react';
+
+// --- SUB-COMPONENTS ---
+
+// Reusable component for the Selection Phase UI
+const CurrentSelectionOverlay: React.FC<{
+  selectedCurrent: OceanCurrent | null;
+  onCancel: () => void;
+  onLaunch: () => void;
+}> = ({ selectedCurrent, onCancel, onLaunch }) => {
+  return (
+    <div className="flex-1 flex flex-col justify-end pb-12 px-4 pointer-events-none">
+       <div className="pointer-events-auto self-center bg-white/90 backdrop-blur rounded-2xl p-6 shadow-2xl max-w-2xl w-full border-b-8 border-blue-500 text-center animate-slide-up">
+          {!selectedCurrent ? (
+            <div className="text-center">
+              <h3 className="text-2xl font-bold text-blue-900 mb-2">Choose a Current!</h3>
+              <p className="text-slate-600">Spin the globe and click on a colorful stream to choose your path.</p>
+              <div className="mt-4 flex flex-wrap justify-center gap-2">
+                 <span className="text-xs bg-red-100 text-red-600 px-2 py-1 rounded-full font-bold">Warm Currents</span>
+                 <span className="text-xs bg-blue-100 text-blue-600 px-2 py-1 rounded-full font-bold">Cold Currents</span>
+              </div>
+            </div>
+          ) : (
+            <CurrentDetailsCard 
+               current={selectedCurrent}
+               onCancel={onCancel}
+               onLaunch={onLaunch}
+            />
+          )}
+       </div>
+    </div>
+  );
+};
+
+// --- MAIN APP COMPONENT ---
 
 const App: React.FC = () => {
   const [phase, setPhase] = useState<GamePhase>('INTRO');
@@ -13,9 +49,34 @@ const App: React.FC = () => {
   const [selectedCurrent, setSelectedCurrent] = useState<OceanCurrent | null>(null);
   const [travelProgress, setTravelProgress] = useState(0);
   const [weatherEffect, setWeatherEffect] = useState<WeatherEffect>('NONE');
+  const [weatherIntensity, setWeatherIntensity] = useState(0.5); // 0.0 to 1.0
+  
   const [destinationData, setDestinationData] = useState<DestinationResponse | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [windowSize, setWindowSize] = useState({ w: window.innerWidth, h: window.innerHeight });
+
+  // Settings State
+  const [showSettings, setShowSettings] = useState(false);
+  const [gameSettings, setGameSettings] = useState<GameSettings>({
+    masterVolume: 0.5,
+    ambienceVolume: 0.5,
+    sfxVolume: 0.6,
+    reduceMotion: false,
+    weatherEnabled: true
+  });
+
+  // Audio Refs
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const mainGainRef = useRef<GainNode | null>(null);
+  const ambienceGainRef = useRef<GainNode | null>(null);
+  const rainGainRef = useRef<GainNode | null>(null);
+  const fogGainRef = useRef<GainNode | null>(null);
+
+  // Quiz State
+  const [isQuizActive, setIsQuizActive] = useState(false);
+  const [activeQuiz, setActiveQuiz] = useState<QuizQuestion | null>(null);
+  const [triggeredCheckpoints, setTriggeredCheckpoints] = useState<number[]>([]);
+  const [shownQuizIds, setShownQuizIds] = useState<string[]>([]);
 
   // Handle Resize for Globe
   useEffect(() => {
@@ -46,49 +107,243 @@ const App: React.FC = () => {
     handleArrivalRef.current = handleArrival;
   }, [selectedCurrent, letter]);
 
+  // --- AUDIO SYSTEM ---
+  const initAudioSystem = () => {
+    if (audioCtxRef.current) return;
+    
+    // Cross-browser support
+    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+    const ctx = new AudioContext();
+    audioCtxRef.current = ctx;
+
+    // Master Gain (controls overall volume)
+    const mainGain = ctx.createGain();
+    mainGain.gain.value = 0; // Start silent, will be ramped up by useEffect
+    mainGain.connect(ctx.destination);
+    mainGainRef.current = mainGain;
+
+    // Ambience Gain (Dedicated channel for rumble)
+    const ambienceGain = ctx.createGain();
+    ambienceGain.gain.value = gameSettings.ambienceVolume;
+    ambienceGain.connect(mainGain);
+    ambienceGainRef.current = ambienceGain;
+
+    // --- SHARED NOISE BUFFERS ---
+    const bufferSize = 2 * ctx.sampleRate;
+    
+    // 1. Brown Noise Buffer (Rumble)
+    const brownBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const brownData = brownBuffer.getChannelData(0);
+    let lastOut = 0;
+    for (let i = 0; i < bufferSize; i++) {
+        const white = Math.random() * 2 - 1;
+        lastOut = (lastOut + (0.02 * white)) / 1.02;
+        brownData[i] = lastOut * 3.5; 
+        brownData[i] *= 3.5; 
+    }
+
+    // 2. White Noise Buffer (Rain/Fog base)
+    const whiteBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const whiteData = whiteBuffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+        whiteData[i] = Math.random() * 2 - 1;
+    }
+    
+    // --- SOUND SOURCE 1: AMBIENT RUMBLE ---
+    const rumbleSrc = ctx.createBufferSource();
+    rumbleSrc.buffer = brownBuffer;
+    rumbleSrc.loop = true;
+    const rumbleFilter = ctx.createBiquadFilter();
+    rumbleFilter.type = 'lowpass';
+    rumbleFilter.frequency.value = 400; // Deep rumble
+    rumbleSrc.connect(rumbleFilter);
+    rumbleFilter.connect(ambienceGain); // Connect to ambience gain, not main directly
+    rumbleSrc.start();
+
+    // --- SOUND SOURCE 2: RAIN (High frequency splashing) ---
+    const rainSrc = ctx.createBufferSource();
+    rainSrc.buffer = whiteBuffer;
+    rainSrc.loop = true;
+    
+    const rainFilter = ctx.createBiquadFilter();
+    rainFilter.type = 'highpass';
+    rainFilter.frequency.value = 800; 
+    
+    const rainSmooth = ctx.createBiquadFilter();
+    rainSmooth.type = 'lowpass';
+    rainSmooth.frequency.value = 8000;
+
+    const rainGain = ctx.createGain();
+    rainGain.gain.value = 0; 
+
+    rainSrc.connect(rainFilter);
+    rainFilter.connect(rainSmooth);
+    rainSmooth.connect(rainGain);
+    rainGain.connect(mainGain); // Rain/Fog go to Main, but controlled by own gain
+    rainSrc.start();
+    rainGainRef.current = rainGain;
+
+    // --- SOUND SOURCE 3: FOG (Eerie Wind/Drone) ---
+    const fogSrc = ctx.createBufferSource();
+    fogSrc.buffer = whiteBuffer;
+    fogSrc.loop = true;
+
+    const fogFilter = ctx.createBiquadFilter();
+    fogFilter.type = 'bandpass';
+    fogFilter.frequency.value = 300; 
+    fogFilter.Q.value = 1.5;
+
+    const fogGain = ctx.createGain();
+    fogGain.gain.value = 0; 
+
+    fogSrc.connect(fogFilter);
+    fogFilter.connect(fogGain);
+    fogGain.connect(mainGain);
+    fogSrc.start();
+    fogGainRef.current = fogGain;
+  };
+
+  // Manage Audio Volume based on Game Phase, Weather AND Settings
+  useEffect(() => {
+    const ctx = audioCtxRef.current;
+    const mainGain = mainGainRef.current;
+    const ambienceGain = ambienceGainRef.current;
+    const rainGain = rainGainRef.current;
+    const fogGain = fogGainRef.current;
+    
+    if (ctx && mainGain) {
+        const now = ctx.currentTime;
+        const isTraveling = phase === 'TRAVEL_SIMULATION';
+        
+        // 1. MASTER VOLUME
+        // If traveling, use setting value. If not traveling, silence.
+        // NOTE: We might want background sound in menu later, but for now stick to travel loop.
+        const targetMaster = isTraveling ? gameSettings.masterVolume : 0;
+        mainGain.gain.setTargetAtTime(targetMaster, now, 0.5);
+
+        // 2. AMBIENCE (Rumble) - Always active if master is up
+        if (ambienceGain) {
+          ambienceGain.gain.setTargetAtTime(gameSettings.ambienceVolume, now, 0.5);
+        }
+        
+        // 3. SFX (Rain/Fog)
+        if (rainGain && fogGain) {
+            // Rain Volume Logic
+            const targetRain = (isTraveling && weatherEffect === 'RAIN') 
+                ? Math.max(0, weatherIntensity * gameSettings.sfxVolume) 
+                : 0;
+            rainGain.gain.setTargetAtTime(targetRain, now, 1.0); 
+
+            // Fog Volume Logic
+            const targetFog = (isTraveling && weatherEffect === 'FOG') 
+                ? Math.max(0, weatherIntensity * gameSettings.sfxVolume * 1.5) // Fog needs boost
+                : 0;
+            fogGain.gain.setTargetAtTime(targetFog, now, 2.5); 
+        }
+        
+        // Resume context if needed
+        if (targetMaster > 0 && ctx.state === 'suspended') {
+            ctx.resume();
+        }
+    }
+  }, [phase, weatherEffect, weatherIntensity, gameSettings]);
+
+
   // Travel Simulation Loop
   useEffect(() => {
-    if (phase === 'TRAVEL_SIMULATION') {
-      let progress = 0;
-      setWeatherEffect('NONE'); // Reset weather at start
-
+    // Only run loop if we are in travel phase AND quiz is NOT active
+    if (phase === 'TRAVEL_SIMULATION' && !isQuizActive) {
+      
       const interval = setInterval(() => {
-        progress += 0.2; // Slower for better visual
-        setTravelProgress(progress);
-        
-        // Random weather logic
-        if (Math.random() < 0.005) {
-          const rand = Math.random();
-          if (rand < 0.6) setWeatherEffect('NONE');
-          else if (rand < 0.8) setWeatherEffect('RAIN');
-          else setWeatherEffect('FOG');
-        }
+        // Calculate new progress based on previous
+        setTravelProgress(prev => {
+           const newProgress = prev + 0.08;
 
-        if (progress >= 100) {
-          clearInterval(interval);
-          setWeatherEffect('NONE'); // Clear weather on arrival
-          // Call the function via ref to ensure we use the latest version/closure context
-          handleArrivalRef.current();
+           // QUIZ TRIGGER LOGIC
+           const checkpoints = [35, 70];
+           
+           const hitCheckpoint = checkpoints.find(cp => 
+               newProgress >= cp && prev < cp && !triggeredCheckpoints.includes(cp)
+           );
+
+           if (hitCheckpoint && selectedCurrent && selectedCurrent.quizzes.length > 0) {
+               const availableQuizzes = selectedCurrent.quizzes.filter(q => !shownQuizIds.includes(q.id));
+               const pool = availableQuizzes.length > 0 ? availableQuizzes : selectedCurrent.quizzes;
+               const quizIndex = Math.floor(Math.random() * pool.length);
+               const quiz = pool[quizIndex];
+               
+               setActiveQuiz(quiz);
+               setIsQuizActive(true);
+               setTriggeredCheckpoints(prevCP => [...prevCP, hitCheckpoint]);
+               setShownQuizIds(prevIds => [...prevIds, quiz.id]);
+               return newProgress; 
+           }
+
+           if (newProgress >= 100) {
+             clearInterval(interval);
+             setWeatherEffect('NONE');
+             handleArrivalRef.current();
+             return 100;
+           }
+           
+           return newProgress;
+        });
+
+        // Weather Logic - Only if enabled in settings
+        if (gameSettings.weatherEnabled && Math.random() < 0.005) {
+          const rand = Math.random();
+          if (rand < 0.6) {
+             setWeatherEffect('NONE');
+          } else if (rand < 0.8) {
+             setWeatherEffect('RAIN');
+             setWeatherIntensity(0.5 + Math.random() * 0.5); 
+          } else {
+             setWeatherEffect('FOG');
+             setWeatherIntensity(0.4 + Math.random() * 0.6); 
+          }
+        } else if (!gameSettings.weatherEnabled && weatherEffect !== 'NONE') {
+            setWeatherEffect('NONE');
         }
-      }, 50); // Update every 50ms
+        
+        // Slowly drift intensity
+        setWeatherIntensity(prev => {
+            const drift = (Math.random() - 0.5) * 0.02;
+            return Math.max(0.2, Math.min(1.0, prev + drift));
+        });
+
+      }, 20);
 
       return () => clearInterval(interval);
     }
-  }, [phase]);
+  }, [phase, isQuizActive, selectedCurrent, triggeredCheckpoints, shownQuizIds, gameSettings.weatherEnabled, weatherEffect]);
+
+  const returnToMap = () => {
+    // Reset simulation state but keep letter
+    setTravelProgress(0);
+    setSelectedCurrent(null);
+    setDestinationData(null);
+    setTriggeredCheckpoints([]); 
+    setIsQuizActive(false);
+    setActiveQuiz(null);
+    setPhase('SELECT_CURRENT');
+    setWeatherEffect('NONE');
+  };
 
   const resetGame = () => {
-    setLetter({ senderName: letter.senderName, content: '' }); // Keep name
+    setLetter({ senderName: letter.senderName, content: '' }); 
     setSelectedCurrent(null);
     setTravelProgress(0);
     setDestinationData(null);
-    setPhase('SELECT_CURRENT'); // Go straight to map after first play? Or write? Let's go to write.
+    setTriggeredCheckpoints([]); 
+    setShownQuizIds([]); 
     setPhase('WRITE_LETTER');
+    setWeatherEffect('NONE');
   };
 
   return (
     <div className="w-full h-screen relative bg-slate-950 overflow-hidden font-sans select-none text-slate-800">
       
-      {/* --- BACKGROUND GLOBE (Always rendered for smoothness) --- */}
+      {/* --- BACKGROUND GLOBE --- */}
       <div className="absolute inset-0 z-0">
         <Globe3D 
           interactive={phase === 'SELECT_CURRENT'} 
@@ -99,30 +354,44 @@ const App: React.FC = () => {
           travelProgress={phase === 'TRAVEL_SIMULATION' ? travelProgress : 0}
           width={windowSize.w}
           height={windowSize.h}
+          reduceMotion={gameSettings.reduceMotion}
         />
       </div>
 
       {/* --- UI LAYER --- */}
       <div className="relative z-10 w-full h-full pointer-events-none">
-        {/* Removed pointer-events-auto from here to allow clicks to pass through to globe in empty areas */}
         <div className="w-full h-full flex flex-col">
           
-          {/* Top Bar - Needs pointer events */}
+          {/* Top Bar */}
           <div className="p-4 flex justify-between items-start pointer-events-auto">
             <h1 className="text-3xl font-black text-cyan-300 drop-shadow-lg tracking-wider" style={{ WebkitTextStroke: '1px #083344' }}>
               OCEAN ODYSSEY
             </h1>
-            <button 
-              onClick={() => alert("Sound settings would appear here!")}
-              className="bg-white/20 hover:bg-white/40 backdrop-blur-md p-3 rounded-full text-white transition"
-            >
-              <Volume2 />
-            </button>
+            <div className="flex gap-2">
+               {/* Back to Map Button - Visible during Travel */}
+               {phase === 'TRAVEL_SIMULATION' && (
+                  <button 
+                    onClick={returnToMap}
+                    className="bg-white/20 hover:bg-white/40 backdrop-blur-md p-3 rounded-full text-white transition flex items-center justify-center hover:scale-110 active:scale-95"
+                    title="Return to Map"
+                  >
+                    <Map size={24} />
+                  </button>
+               )}
+
+               <button 
+                  onClick={() => setShowSettings(true)}
+                  className="bg-white/20 hover:bg-white/40 backdrop-blur-md p-3 rounded-full text-white transition flex items-center justify-center hover:rotate-90 duration-500"
+                  title="Settings"
+                >
+                  <Settings />
+                </button>
+            </div>
           </div>
 
           {/* --- SCREENS --- */}
 
-          {/* 1. INTRO SCREEN - Full overlay needs pointer events */}
+          {/* 1. INTRO SCREEN */}
           {phase === 'INTRO' && (
             <div className="flex-1 flex flex-col items-center justify-center text-center p-8 bg-black/40 backdrop-blur-sm animate-fade-in pointer-events-auto">
               <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-lg w-full border-4 border-cyan-500">
@@ -140,7 +409,10 @@ const App: React.FC = () => {
                 />
                 <button 
                   disabled={!letter.senderName}
-                  onClick={() => setPhase('WRITE_LETTER')}
+                  onClick={() => {
+                      setPhase('WRITE_LETTER');
+                      initAudioSystem();
+                  }}
                   className="w-full bg-cyan-500 hover:bg-cyan-600 text-white text-xl font-bold py-4 rounded-xl shadow-lg transition-transform hover:scale-105 disabled:opacity-50 disabled:scale-100 flex items-center justify-center gap-2"
                 >
                   Start Adventure <ArrowRight />
@@ -149,7 +421,7 @@ const App: React.FC = () => {
             </div>
           )}
 
-          {/* 2. WRITE LETTER - Full overlay needs pointer events */}
+          {/* 2. WRITE LETTER */}
           {phase === 'WRITE_LETTER' && (
             <div className="flex-1 flex flex-col items-center justify-center p-4 bg-black/40 backdrop-blur-sm pointer-events-auto">
                <div className="bg-amber-50 p-8 rounded-xl shadow-2xl max-w-xl w-full border-4 border-amber-200 relative transform rotate-1">
@@ -176,28 +448,13 @@ const App: React.FC = () => {
             </div>
           )}
 
-          {/* 3. SELECT CURRENT - Container is transparent/none, allowing clicks to globe. Inner Card is auto. */}
+          {/* 3. SELECT CURRENT */}
           {phase === 'SELECT_CURRENT' && (
-             <div className="flex-1 flex flex-col justify-end pb-12 px-4 pointer-events-none">
-                <div className="pointer-events-auto self-center bg-white/90 backdrop-blur rounded-2xl p-6 shadow-2xl max-w-2xl w-full border-b-8 border-blue-500 text-center animate-slide-up">
-                   {!selectedCurrent ? (
-                     <div>
-                       <h3 className="text-2xl font-bold text-blue-900 mb-2">Choose a Current!</h3>
-                       <p className="text-slate-600">Spin the globe and click on a colorful stream to choose your path.</p>
-                       <div className="mt-4 flex flex-wrap justify-center gap-2">
-                          <span className="text-xs bg-red-100 text-red-600 px-2 py-1 rounded-full font-bold">Warm Currents</span>
-                          <span className="text-xs bg-blue-100 text-blue-600 px-2 py-1 rounded-full font-bold">Cold Currents</span>
-                       </div>
-                     </div>
-                   ) : (
-                     <CurrentDetailsCard 
-                        current={selectedCurrent}
-                        onCancel={() => setSelectedCurrent(null)}
-                        onLaunch={() => setPhase('TRAVEL_SIMULATION')}
-                     />
-                   )}
-                </div>
-             </div>
+             <CurrentSelectionOverlay 
+                selectedCurrent={selectedCurrent}
+                onCancel={() => setSelectedCurrent(null)}
+                onLaunch={() => setPhase('TRAVEL_SIMULATION')}
+             />
           )}
 
           {/* 4. TRAVEL SIMULATION */}
@@ -206,14 +463,26 @@ const App: React.FC = () => {
               current={selectedCurrent} 
               progress={travelProgress} 
               weather={weatherEffect}
+              intensity={weatherIntensity}
+              reduceMotion={gameSettings.reduceMotion}
+              weatherEnabled={gameSettings.weatherEnabled}
             />
           )}
 
-          {/* 5. ARRIVAL & RESULT - Enhanced Celebration Screen */}
+          {/* 4b. QUIZ MODAL */}
+          {isQuizActive && activeQuiz && (
+            <div className="pointer-events-auto">
+               <QuizModal 
+                 quiz={activeQuiz}
+                 onComplete={() => setIsQuizActive(false)}
+               />
+            </div>
+          )}
+
+          {/* 5. ARRIVAL & RESULT */}
           {phase === 'ARRIVAL' && (
             <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-lg pointer-events-auto overflow-hidden">
-               
-               {/* --- ANIMATIONS STYLE --- */}
+               {/* ... (Animation styles kept same) ... */}
                <style>{`
                  @keyframes swimAcross {
                    0% { transform: translateX(-20vw) translateY(0) rotate(5deg); opacity: 0; }
@@ -226,119 +495,79 @@ const App: React.FC = () => {
                    70% { transform: scale(1.05); opacity: 1; }
                    100% { transform: scale(1); }
                  }
-                 @keyframes float-particle {
-                   0%, 100% { transform: translateY(0) rotate(0); }
-                   50% { transform: translateY(-20px) rotate(10deg); }
-                 }
                `}</style>
-
-               {/* --- CELEBRATION BACKGROUND EFFECTS --- */}
-               {!isGenerating && destinationData && (
+               
+               {/* Only show background effects if not reduced motion */}
+               {!gameSettings.reduceMotion && !isGenerating && destinationData && (
                  <div className="absolute inset-0 pointer-events-none overflow-hidden">
-                    {/* Confetti / Bubbles */}
-                    {[...Array(30)].map((_, i) => (
-                      <div 
-                        key={`confetti-${i}`}
-                        className="absolute text-2xl md:text-4xl animate-pulse"
-                        style={{
-                          left: `${Math.random() * 100}%`,
-                          top: `${Math.random() * 100}%`,
-                          animation: `float-particle ${Math.random() * 3 + 2}s ease-in-out infinite`,
-                          animationDelay: `${Math.random() * 2}s`,
-                          opacity: Math.random() * 0.3 + 0.1
-                        }}
-                      >
-                        {['🎉', '✨', '🫧', '🌟', '🎈'][Math.floor(Math.random() * 5)]}
-                      </div>
-                    ))}
-                    
-                    {/* Giant Swimming Animals from the selected current */}
-                    {selectedCurrent?.biodiversity.map((animal, i) => (
-                       <div 
-                         key={`swim-${i}`}
-                         className="absolute text-8xl md:text-9xl pointer-events-none whitespace-nowrap blur-[1px]"
-                         style={{
-                           top: `${15 + i * 25}%`,
-                           left: '-20%',
-                           animation: `swimAcross ${20 + i * 5}s linear infinite`,
-                           animationDelay: `0s`,
-                           opacity: 0.15
-                         }}
-                       >
-                          {animal.emoji}
-                       </div>
+                    {/* Simplified confetti loop */}
+                    {[...Array(20)].map((_, i) => (
+                      <div key={i} className="absolute text-3xl animate-pulse" style={{left: `${Math.random()*100}%`, top: `${Math.random()*100}%`}}>🎉</div>
                     ))}
                  </div>
                )}
 
                {isGenerating ? (
                  <div className="text-white text-center z-10 relative">
-                    <div className="absolute inset-0 bg-cyan-500/20 blur-3xl rounded-full -z-10 animate-pulse"></div>
-                    <div className="text-8xl animate-bounce mb-6 filter drop-shadow-[0_0_20px_rgba(255,255,255,0.5)]">📬</div>
-                    <h2 className="text-4xl font-black text-cyan-300 mb-2 drop-shadow-md">Bubble Arrived!</h2>
-                    <p className="animate-pulse text-xl text-cyan-100 font-medium">Knocking on doors in {selectedCurrent?.endLocation}...</p>
+                    <div className="text-8xl animate-bounce mb-6">📬</div>
+                    <h2 className="text-4xl font-black text-cyan-300 mb-2">Bubble Arrived!</h2>
+                    <p className="animate-pulse text-xl text-cyan-100">Knocking on doors in {selectedCurrent?.endLocation}...</p>
                  </div>
                ) : destinationData && (
-                 <div 
-                   className="bg-white/95 backdrop-blur-xl rounded-3xl shadow-[0_0_60px_rgba(6,182,212,0.6)] max-w-2xl w-full overflow-hidden flex flex-col max-h-[90vh] border-4 border-cyan-300 relative z-10 transform"
-                   style={{ animation: 'popIn 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards' }}
-                 >
-                    {/* Decorative Ribbon */}
-                    <div className="absolute top-0 right-0 transform translate-x-1/3 -translate-y-1/3 rotate-45 bg-yellow-400 text-yellow-900 font-bold py-1 px-12 shadow-lg z-20 border border-yellow-200">
-                       SUCCESS!
-                    </div>
-
-                    {/* Header with Location Image/Gradient */}
+                 <div className="bg-white/95 backdrop-blur-xl rounded-3xl shadow-[0_0_60px_rgba(6,182,212,0.6)] max-w-2xl w-full flex flex-col max-h-[90vh] border-4 border-cyan-300 relative z-10 transform" style={{ animation: gameSettings.reduceMotion ? 'none' : 'popIn 0.6s' }}>
+                    
                     <div className="bg-gradient-to-r from-cyan-500 via-blue-500 to-indigo-600 p-8 text-white text-center relative overflow-hidden shrink-0">
-                       <div className="absolute inset-0 opacity-20 bg-[url('https://www.transparenttextures.com/patterns/fish-net.png')]"></div>
-                       {/* Floating icons in header */}
-                       <div className="absolute top-4 left-6 text-4xl opacity-60 animate-bounce">✨</div>
-                       <div className="absolute bottom-4 right-6 text-4xl opacity-60 animate-pulse delay-75">🫧</div>
-                       
-                       <h2 className="text-4xl md:text-5xl font-black relative z-10 drop-shadow-lg mb-2 tracking-tight">Message Received!</h2>
-                       <div className="inline-block bg-white/20 px-5 py-2 rounded-full backdrop-blur-md border border-white/30 shadow-inner">
-                         <p className="font-bold relative z-10 flex items-center gap-2 text-shadow-sm">
+                       <h2 className="text-4xl md:text-5xl font-black relative z-10 drop-shadow-lg mb-2">Message Received!</h2>
+                       <div className="inline-block bg-white/20 px-5 py-2 rounded-full backdrop-blur-md border border-white/30">
+                         <p className="font-bold relative z-10 flex items-center gap-2">
                             <Map size={18} className="text-yellow-300" /> 
-                            <span className="text-cyan-50">Location:</span> 
-                            <span className="text-white text-lg">{destinationData.location}</span>
+                            <span>{destinationData.location}</span>
                          </p>
                        </div>
                     </div>
                     
-                    <div className="p-6 md:p-8 overflow-y-auto bg-gradient-to-b from-white to-slate-50">
-                       {/* Question Recap */}
-                       <div className="bg-amber-50 border-l-8 border-amber-400 p-5 mb-6 rounded-r-xl shadow-sm relative">
-                          <span className="absolute -top-3 -left-2 bg-amber-400 text-amber-900 text-xs font-bold px-2 py-1 rounded">YOUR LETTER</span>
-                          <p className="text-slate-700 italic text-lg leading-relaxed pt-1">"{letter.content}"</p>
+                    <div className="p-6 md:p-8 overflow-y-auto bg-slate-50">
+                       <div className="bg-amber-50 border-l-8 border-amber-400 p-5 mb-6 rounded-r-xl">
+                          <p className="text-slate-700 italic text-lg">"{letter.content}"</p>
                        </div>
-
-                       {/* Reply Body */}
-                       <div className="prose prose-lg text-slate-700 mb-8 leading-relaxed">
+                       <div className="prose prose-lg text-slate-700 mb-8">
                           {destinationData.replyText.split('\n').map((line, i) => (
-                             <p key={i} className="mb-3 first:font-medium first:text-xl first:text-cyan-800">{line}</p>
+                             <p key={i} className="mb-3">{line}</p>
                           ))}
                        </div>
-
-                       {/* Fun Fact Card */}
-                       <div className="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-2xl p-5 flex items-start gap-4 mb-8 border border-indigo-100 shadow-[inset_0_2px_4px_rgba(255,255,255,1)] transform transition hover:scale-[1.01]">
-                          <div className="bg-white p-3 rounded-full text-3xl shadow-sm border border-indigo-100 shrink-0">💡</div>
-                          <div>
-                             <h4 className="font-black text-indigo-800 text-sm uppercase tracking-wide mb-1">Did you know?</h4>
-                             <p className="text-indigo-900 text-base font-medium">{destinationData.funFact}</p>
-                          </div>
+                       <div className="bg-blue-100 rounded-2xl p-5 mb-8 border border-blue-200">
+                          <h4 className="font-black text-blue-800 text-sm uppercase mb-1">Did you know?</h4>
+                          <p className="text-blue-900">{destinationData.funFact}</p>
                        </div>
+                       
+                       <div className="flex flex-col md:flex-row gap-3">
+                           <button 
+                             onClick={returnToMap}
+                             className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-lg py-4 rounded-xl shadow transition-all flex items-center justify-center gap-2"
+                           >
+                             <Map size={20} /> Map
+                           </button>
 
-                       <button 
-                         onClick={resetGame}
-                         className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-xl py-4 rounded-xl shadow-lg transition-all hover:shadow-cyan-500/50 hover:-translate-y-1 flex items-center justify-center gap-3 active:scale-95 group"
-                       >
-                         <RefreshCw size={24} className="group-hover:rotate-180 transition-transform duration-500" /> 
-                         Send Another Bubble
-                       </button>
+                           <button 
+                             onClick={resetGame}
+                             className="flex-[2] bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-xl py-4 rounded-xl shadow-lg transition-all hover:shadow-cyan-500/50 flex items-center justify-center gap-3"
+                           >
+                             <RefreshCw size={24} /> New Letter
+                           </button>
+                       </div>
                     </div>
                  </div>
                )}
             </div>
+          )}
+
+          {/* 6. SETTINGS OVERLAY */}
+          {showSettings && (
+             <SettingsModal 
+                settings={gameSettings}
+                onUpdate={setGameSettings}
+                onClose={() => setShowSettings(false)}
+             />
           )}
 
         </div>
