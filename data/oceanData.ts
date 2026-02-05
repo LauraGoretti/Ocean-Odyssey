@@ -262,5 +262,93 @@ export const OCEAN_CURRENTS: OceanCurrent[] = [
       'It acts like a giant air conditioner for the coast, keeping summers cool and foggy.',
       'The cold water brings up nutrients from the deep, helping giant kelp forests grow faster than trees!'
     ]
+  },
+  {
+    id: 'acc',
+    name: 'Antarctic Circumpolar',
+    description: 'The world\'s strongest current! It flows completely around Antarctica, connecting the Atlantic, Pacific, and Indian Oceans.',
+    startLocation: 'Drake Passage',
+    endLocation: 'Southern Ocean Loop',
+    color: '#8e44ad', // Deep Purple
+    avgTemp: '2°C',
+    avgSpeed: '4.0 m/s',
+    path: [
+      { lat: -58.0, lng: -65.0 }, // Drake Passage start
+      { lat: -50.0, lng: -30.0 }, // South Atlantic
+      { lat: -50.0, lng: 70.0 },  // Indian Ocean sector
+      { lat: -55.0, lng: 130.0 }, // South of Australia
+      { lat: -58.0, lng: 180.0 }, // Mid-Pacific / Date Line
+      { lat: -60.0, lng: -160.0 }, // Pacific sector
+      { lat: -62.0, lng: -70.0 }  // Back near Drake Passage
+    ],
+    biodiversity: [
+      { name: 'Antarctic Krill', emoji: '🦐', depth: 'Surface' },
+      { name: 'Emperor Penguin', emoji: '🐧', depth: 'Surface' },
+      { name: 'Orca', emoji: '🐋', depth: 'Surface' },
+      { name: 'Wandering Albatross', emoji: '🐦', depth: 'Air' }
+    ],
+    quizzes: [
+      {
+        id: 'q_acc_1',
+        question: 'This current is special because...',
+        options: ['It flows in a circle', 'It is made of jelly', 'It stops in summer'],
+        correctAnswer: 0,
+        fact: 'It is the only current that flows all the way around the globe without hitting land!'
+      },
+      {
+        id: 'q_acc_2',
+        question: 'What tiny animal here feeds almost all the whales?',
+        options: ['Ants', 'Krill', 'Goldfish'],
+        correctAnswer: 1,
+        fact: 'Antarctic Krill exist in massive swarms and are the main food for whales, seals, and penguins!'
+      }
+    ],
+    funFacts: [
+      'It carries 100 times more water than all the rivers on Earth combined!',
+      'It helps keep Antarctica frozen by blocking warm water from reaching the ice.'
+    ]
+  },
+  {
+    id: 'labrador',
+    name: 'Labrador Current',
+    description: 'A chilly current flowing south from the Arctic Ocean, famous for carrying icebergs down "Iceberg Alley".',
+    startLocation: 'Baffin Bay',
+    endLocation: 'Newfoundland',
+    color: '#a29bfe', // Icy Lavender
+    avgTemp: '0°C',
+    avgSpeed: '0.6 m/s',
+    path: [
+      { lat: 70.0, lng: -60.0 }, // Baffin Bay
+      { lat: 65.0, lng: -58.0 }, // Davis Strait
+      { lat: 60.0, lng: -62.0 }, // Labrador Coast
+      { lat: 55.0, lng: -55.0 }, // Down coast
+      { lat: 48.0, lng: -50.0 }  // Grand Banks
+    ],
+    biodiversity: [
+      { name: 'Polar Bear', emoji: '🐻‍❄️', depth: 'Surface' },
+      { name: 'Beluga Whale', emoji: '🐋', depth: 'Surface' },
+      { name: 'Atlantic Puffin', emoji: '🐧', depth: 'Surface' },
+      { name: 'Greenland Shark', emoji: '🦈', depth: 'Deep' }
+    ],
+    quizzes: [
+      {
+        id: 'q_lab_1',
+        question: 'What large floating objects is this current famous for carrying?',
+        options: ['Rubber Ducks', 'Icebergs', 'Surfboards'],
+        correctAnswer: 1,
+        fact: 'It carries huge icebergs from Greenland all the way south to where ships sail!'
+      },
+      {
+        id: 'q_lab_2',
+        question: 'When this cold current meets the warm Gulf Stream, what happens?',
+        options: ['It explodes', 'Thick Fog forms', 'The water turns purple'],
+        correctAnswer: 1,
+        fact: 'The mix of freezing cold and super warm water creates some of the thickest fog in the world.'
+      }
+    ],
+    funFacts: [
+      'The path it takes is often called "Iceberg Alley" because of all the ice it transports.',
+      'The Greenland Shark living here can live to be over 400 years old!'
+    ]
   }
 ];

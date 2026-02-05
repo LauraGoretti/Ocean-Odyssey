@@ -35,17 +35,29 @@ const Globe3D: React.FC<Globe3DProps> = ({
   const [isGlobeReady, setIsGlobeReady] = useState(false);
   const [rippleData, setRippleData] = useState<any[]>([]);
 
-  // Helper: Interpolate position along path
+  // Helper: Interpolate position along path with Date Line support
   const getBubblePosition = (currentId: string, progress: number) => {
     const current = OCEAN_CURRENTS.find(c => c.id === currentId);
     if (!current || !current.path.length) return null;
 
     const path = current.path;
+    
     // Calculate total length (approximate)
     let totalDist = 0;
     const dists = [0];
+    
     for (let i = 1; i < path.length; i++) {
-        const d = Math.sqrt(Math.pow(path[i].lat - path[i-1].lat, 2) + Math.pow(path[i].lng - path[i-1].lng, 2));
+        const p1 = path[i-1];
+        const p2 = path[i];
+
+        const dLat = p2.lat - p1.lat;
+        let dLng = p2.lng - p1.lng;
+        
+        // Fix for Date Line crossing: take the shortest path
+        if (dLng > 180) dLng -= 360;
+        if (dLng < -180) dLng += 360;
+
+        const d = Math.sqrt(Math.pow(dLat, 2) + Math.pow(dLng, 2));
         totalDist += d;
         dists.push(totalDist);
     }
@@ -67,9 +79,23 @@ const Globe3D: React.FC<Globe3DProps> = ({
     const p1 = path[idx];
     const p2 = path[idx+1];
 
+    // Interpolate Latitude
+    const lat = p1.lat + (p2.lat - p1.lat) * segmentProgress;
+    
+    // Interpolate Longitude (Date Line Aware)
+    let dLng = p2.lng - p1.lng;
+    if (dLng > 180) dLng -= 360;
+    if (dLng < -180) dLng += 360;
+    
+    let lng = p1.lng + dLng * segmentProgress;
+    
+    // Normalize Longitude to -180..180
+    if (lng > 180) lng -= 360;
+    if (lng < -180) lng += 360;
+
     return {
-        lat: p1.lat + (p2.lat - p1.lat) * segmentProgress,
-        lng: p1.lng + (p2.lng - p1.lng) * segmentProgress,
+        lat,
+        lng,
         alt: 0.08 // Bubble altitude
     };
   };

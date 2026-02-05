@@ -3,6 +3,55 @@ import { OceanCurrent, Letter, DestinationResponse } from '../types';
 
 const getClient = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
 
+// Simple in-memory cache to prevent regenerating the same image multiple times in a session
+const imageCache: Record<string, string> = {};
+
+export const generateCurrentImage = async (current: OceanCurrent): Promise<string | null> => {
+  // Return cached image if available
+  if (imageCache[current.id]) {
+    return imageCache[current.id];
+  }
+
+  const ai = getClient();
+  const bioList = current.biodiversity.map(b => b.name).join(', ');
+  
+  const prompt = `
+    Create a vibrant, child-friendly 3D cartoon illustration of the ${current.name} ocean current.
+    Setting: Underwater, bright, colorful, magical lighting.
+    Context: ${current.description}.
+    Key Elements: Include cute friendly marine life like ${bioList}.
+    Style: Disney/Pixar style, soft edges, volumetric lighting, high quality.
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image',
+      contents: {
+        parts: [{ text: prompt }]
+      },
+      config: {
+        imageConfig: {
+            aspectRatio: "3:4"
+        }
+      }
+    });
+
+    for (const part of response.candidates?.[0]?.content?.parts || []) {
+      if (part.inlineData) {
+        const base64Image = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+        // Cache the result
+        imageCache[current.id] = base64Image;
+        return base64Image;
+      }
+    }
+    
+    return null;
+  } catch (error) {
+    console.error("Gemini Image Gen Error:", error);
+    return null;
+  }
+};
+
 export const generateDestinationResponse = async (
   current: OceanCurrent,
   letter: Letter
